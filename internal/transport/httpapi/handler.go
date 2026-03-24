@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -80,8 +81,19 @@ func (h *Handler) handleWebhookVerification(responseWriter http.ResponseWriter, 
 }
 
 func (h *Handler) handleWebhookNotification(responseWriter http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeError(responseWriter, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := validateWebhookSignature(request.Header.Get("X-Hub-Signature-256"), body, h.config.WhatsAppAppSecret); err != nil {
+		writeError(responseWriter, http.StatusUnauthorized, err.Error())
+		return
+	}
+
 	var notification WhatsAppWebhookNotification
-	if err := json.NewDecoder(request.Body).Decode(&notification); err != nil {
+	if err := json.Unmarshal(body, &notification); err != nil {
 		writeError(responseWriter, http.StatusBadRequest, "invalid json")
 		return
 	}

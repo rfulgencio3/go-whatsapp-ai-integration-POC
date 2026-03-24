@@ -20,6 +20,7 @@ type Config struct {
 	RequestTimeout           time.Duration
 	ConversationHistoryLimit int
 	WhatsAppVerifyToken      string
+	WhatsAppAppSecret        string
 	WhatsAppAccessToken      string
 	WhatsAppPhoneNumberID    string
 	GeminiAPIKey             string
@@ -34,6 +35,7 @@ func Load() Config {
 		RequestTimeout:           getDurationEnv("REQUEST_TIMEOUT", DefaultRequestTimeout),
 		ConversationHistoryLimit: getIntEnv("CONVERSATION_HISTORY_LIMIT", DefaultConversationHistoryLimit),
 		WhatsAppVerifyToken:      strings.TrimSpace(os.Getenv("WHATSAPP_VERIFY_TOKEN")),
+		WhatsAppAppSecret:        strings.TrimSpace(os.Getenv("WHATSAPP_APP_SECRET")),
 		WhatsAppAccessToken:      strings.TrimSpace(os.Getenv("WHATSAPP_ACCESS_TOKEN")),
 		WhatsAppPhoneNumberID:    strings.TrimSpace(os.Getenv("WHATSAPP_PHONE_NUMBER_ID")),
 		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),

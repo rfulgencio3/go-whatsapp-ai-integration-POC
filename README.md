@@ -27,6 +27,7 @@ The project is organized with a clean architecture style:
 | `REQUEST_TIMEOUT` | no | outbound HTTP timeout, default `20s` |
 | `CONVERSATION_HISTORY_LIMIT` | no | messages kept in memory per phone number, default `12` |
 | `WHATSAPP_VERIFY_TOKEN` | for real webhook | token used in Meta webhook verification |
+| `WHATSAPP_APP_SECRET` | recommended for real webhook | Meta app secret used to validate `X-Hub-Signature-256` on incoming webhook notifications |
 | `WHATSAPP_ACCESS_TOKEN` | for real replies | WhatsApp Cloud API bearer token |
 | `WHATSAPP_PHONE_NUMBER_ID` | for real replies | WhatsApp Cloud API phone number id |
 | `GEMINI_API_KEY` | for real AI replies | Gemini API key |
@@ -39,6 +40,7 @@ The project is organized with a clean architecture style:
 ```powershell
 $env:HTTP_ADDRESS=":8081"
 $env:WHATSAPP_VERIFY_TOKEN="your-verify-token"
+$env:WHATSAPP_APP_SECRET="your-meta-app-secret"
 $env:WHATSAPP_ACCESS_TOKEN="your-meta-token"
 $env:WHATSAPP_PHONE_NUMBER_ID="1234567890"
 $env:GEMINI_API_KEY="your-gemini-key"
@@ -70,7 +72,7 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 1. Create a Meta app with WhatsApp Cloud API enabled.
 2. Configure the webhook URL to point to `GET/POST /webhook`.
 3. Use the same value in Meta and `WHATSAPP_VERIFY_TOKEN`.
-4. Set `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID`.
+4. Set `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_PHONE_NUMBER_ID`.
 5. Set `GEMINI_API_KEY`.
 6. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel.
 
@@ -79,8 +81,5 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 - Conversation history is in memory only.
 - Only text messages are processed.
 - There is no retry, queue, or deduplication strategy.
-- There is no webhook signature validation yet.
+- `POST /webhook` supports Meta signature validation when `WHATSAPP_APP_SECRET` is configured.
 - Audio, image, and document messages are not supported.
-
-
-
