@@ -34,20 +34,37 @@ type stubConversationRepository struct {
 }
 
 func newStubConversationRepository() *stubConversationRepository {
-	return &stubConversationRepository{
-		store: make(map[string][]chat.Message),
-	}
+	return &stubConversationRepository{store: make(map[string][]chat.Message)}
 }
 
-func (s *stubConversationRepository) AppendMessage(phoneNumber string, message chat.Message) []chat.Message {
+func (s *stubConversationRepository) GetMessages(_ context.Context, phoneNumber string) ([]chat.Message, error) {
+	return append([]chat.Message(nil), s.store[phoneNumber]...), nil
+}
+
+func (s *stubConversationRepository) AppendMessage(_ context.Context, phoneNumber string, message chat.Message) error {
 	s.store[phoneNumber] = append(s.store[phoneNumber], message)
-	return append([]chat.Message(nil), s.store[phoneNumber]...)
+	return nil
+}
+
+type stubMessageArchive struct {
+	recorded []chat.Message
+	err      error
+}
+
+func (s *stubMessageArchive) RecordMessage(_ context.Context, _ string, message chat.Message) error {
+	if s.err != nil {
+		return s.err
+	}
+
+	s.recorded = append(s.recorded, message)
+	return nil
 }
 
 func TestBuildReply(t *testing.T) {
 	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{}
-	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository)
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive)
 
 	reply, err := service.BuildReply(context.Background(), "+55 (11) 99999-9999", "hello")
 	if err != nil {
@@ -66,12 +83,17 @@ func TestBuildReply(t *testing.T) {
 	if messages[0].Role != chat.UserRole || messages[1].Role != chat.AssistantRole {
 		t.Fatalf("expected user/assistant history, got %+v", messages)
 	}
+
+	if len(archive.recorded) != 2 {
+		t.Fatalf("expected 2 archived messages, got %d", len(archive.recorded))
+	}
 }
 
 func TestProcessIncomingMessageRejectsPhoneNumberOutsideAllowList(t *testing.T) {
 	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{}
-	service := NewService("5511888888888", stubReplyGenerator{reply: "assistant reply"}, sender, repository)
+	service := NewService("5511888888888", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive)
 
 	err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
 		PhoneNumber: "5511999999999",
@@ -80,5 +102,17 @@ func TestProcessIncomingMessageRejectsPhoneNumberOutsideAllowList(t *testing.T) 
 
 	if !errors.Is(err, chat.ErrPhoneNumberNotAllowed) {
 		t.Fatalf("expected ErrPhoneNumberNotAllowed, got %v", err)
+	}
+}
+
+func TestBuildReplyReturnsArchiveError(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{err: errors.New("archive failure")}
+	sender := &stubMessageSender{}
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive)
+
+	_, err := service.BuildReply(context.Background(), "5511999999999", "hello")
+	if err == nil || err.Error() != "archive failure" {
+		t.Fatalf("expected archive failure, got %v", err)
 	}
 }

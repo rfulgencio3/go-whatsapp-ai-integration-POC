@@ -23,9 +23,10 @@ The project is organized with a clean architecture style:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `HTTP_ADDRESS` | no | HTTP bind address, default `:8081` |
+| `HTTP_ADDRESS` | no | HTTP bind address, overrides `PORT` when both exist |
+| `PORT` | no | container-friendly fallback port, useful for Railway |
 | `REQUEST_TIMEOUT` | no | outbound HTTP timeout, default `20s` |
-| `CONVERSATION_HISTORY_LIMIT` | no | messages kept in memory per phone number, default `12` |
+| `CONVERSATION_HISTORY_LIMIT` | no | messages kept in the hot conversation store, default `12` |
 | `WHATSAPP_VERIFY_TOKEN` | for real webhook | token used in Meta webhook verification |
 | `WHATSAPP_APP_SECRET` | recommended for real webhook | Meta app secret used to validate `X-Hub-Signature-256` on incoming webhook notifications |
 | `WHATSAPP_ACCESS_TOKEN` | for real replies | WhatsApp Cloud API bearer token |
@@ -34,6 +35,10 @@ The project is organized with a clean architecture style:
 | `GEMINI_MODEL` | no | Gemini model, default `gemini-2.0-flash` |
 | `SYSTEM_PROMPT` | no | base system instruction for the assistant |
 | `ALLOWED_PHONE_NUMBER` | no | optional allowlist for a single phone number |
+| `REDIS_URL` | recommended | Redis connection string used for recent conversation history |
+| `REDIS_CONVERSATION_TTL` | no | TTL for Redis conversation keys, default `24h` |
+| `REDIS_KEY_PREFIX` | no | Redis key prefix for history, default `chat:history` |
+| `DATABASE_URL` | recommended | Postgres connection string used to archive all chat messages |
 
 ## Run
 
@@ -44,12 +49,18 @@ $env:WHATSAPP_APP_SECRET="your-meta-app-secret"
 $env:WHATSAPP_ACCESS_TOKEN="your-meta-token"
 $env:WHATSAPP_PHONE_NUMBER_ID="1234567890"
 $env:GEMINI_API_KEY="your-gemini-key"
+$env:REDIS_URL="redis://localhost:6379/0"
+$env:DATABASE_URL="postgres://postgres:postgres@localhost:5432/whatsapp_ai?sslmode=disable"
 go run .
 ```
 
-If `GEMINI_API_KEY` is not configured, the application falls back to a deterministic mock reply so the end-to-end pipeline can still be exercised locally.
+Behavior by configuration:
 
-If WhatsApp sender credentials are not configured, the reply is logged instead of sent.
+- without `REDIS_URL`, the application falls back to in-memory conversation history;
+- with `REDIS_URL`, recent conversation context is stored in Redis;
+- with `DATABASE_URL`, every user and assistant message is archived in Postgres;
+- without `GEMINI_API_KEY`, the application falls back to a deterministic mock reply;
+- without WhatsApp sender credentials, outbound replies are logged instead of sent.
 
 ## Local simulation
 
@@ -74,12 +85,14 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 3. Use the same value in Meta and `WHATSAPP_VERIFY_TOKEN`.
 4. Set `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_PHONE_NUMBER_ID`.
 5. Set `GEMINI_API_KEY`.
-6. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel.
+6. Configure `REDIS_URL` for hot conversation state.
+7. Configure `DATABASE_URL` for durable message history.
+8. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel.
 
 ## Current limitations
 
-- Conversation history is in memory only.
-- Only text messages are processed.
+- There is no message idempotency yet.
 - There is no retry, queue, or deduplication strategy.
 - `POST /webhook` supports Meta signature validation when `WHATSAPP_APP_SECRET` is configured.
+- Postgres currently stores message history but not higher-level conversation/session entities.
 - Audio, image, and document messages are not supported.

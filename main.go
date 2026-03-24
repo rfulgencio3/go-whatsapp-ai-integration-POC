@@ -10,7 +10,11 @@ import (
 )
 
 func main() {
-	application := app.New(config.Load())
+	application, err := app.New(config.Load())
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if err := application.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

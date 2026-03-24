@@ -13,6 +13,8 @@ const (
 	DefaultSystemPrompt             = "You are a WhatsApp support assistant. Reply in Brazilian Portuguese with concise, useful, and context-aware answers."
 	DefaultRequestTimeout           = 20 * time.Second
 	DefaultConversationHistoryLimit = 12
+	DefaultRedisConversationTTL     = 24 * time.Hour
+	DefaultRedisKeyPrefix           = "chat:history"
 )
 
 type Config struct {
@@ -27,11 +29,15 @@ type Config struct {
 	GeminiModel              string
 	SystemPrompt             string
 	AllowedPhoneNumber       string
+	RedisURL                 string
+	RedisConversationTTL     time.Duration
+	RedisKeyPrefix           string
+	DatabaseURL              string
 }
 
 func Load() Config {
 	return Config{
-		HTTPAddress:              getEnv("HTTP_ADDRESS", DefaultHTTPAddress),
+		HTTPAddress:              resolveHTTPAddress(),
 		RequestTimeout:           getDurationEnv("REQUEST_TIMEOUT", DefaultRequestTimeout),
 		ConversationHistoryLimit: getIntEnv("CONVERSATION_HISTORY_LIMIT", DefaultConversationHistoryLimit),
 		WhatsAppVerifyToken:      strings.TrimSpace(os.Getenv("WHATSAPP_VERIFY_TOKEN")),
@@ -42,6 +48,10 @@ func Load() Config {
 		GeminiModel:              getEnv("GEMINI_MODEL", DefaultGeminiModel),
 		SystemPrompt:             getEnv("SYSTEM_PROMPT", DefaultSystemPrompt),
 		AllowedPhoneNumber:       normalizePhoneNumber(strings.TrimSpace(os.Getenv("ALLOWED_PHONE_NUMBER"))),
+		RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
+		RedisConversationTTL:     getDurationEnv("REDIS_CONVERSATION_TTL", DefaultRedisConversationTTL),
+		RedisKeyPrefix:           getEnv("REDIS_KEY_PREFIX", DefaultRedisKeyPrefix),
+		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 	}
 }
 
@@ -55,6 +65,14 @@ func (c Config) HasWhatsAppSenderConfig() bool {
 
 func (c Config) HasWhatsAppWebhookConfig() bool {
 	return c.WhatsAppVerifyToken != ""
+}
+
+func (c Config) HasRedisConfig() bool {
+	return c.RedisURL != ""
+}
+
+func (c Config) HasDatabaseConfig() bool {
+	return c.DatabaseURL != ""
 }
 
 func getEnv(key, fallback string) string {
@@ -91,6 +109,22 @@ func getIntEnv(key string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func resolveHTTPAddress() string {
+	if address := strings.TrimSpace(os.Getenv("HTTP_ADDRESS")); address != "" {
+		return address
+	}
+
+	if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
+		if strings.HasPrefix(port, ":") {
+			return port
+		}
+
+		return ":" + port
+	}
+
+	return DefaultHTTPAddress
 }
 
 func normalizePhoneNumber(value string) string {

@@ -1,6 +1,9 @@
 package chat
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 type MessageRole string
 
@@ -10,8 +13,9 @@ const (
 )
 
 type Message struct {
-	Role MessageRole
-	Text string
+	Role      MessageRole
+	Text      string
+	CreatedAt time.Time
 }
 
 type IncomingMessage struct {

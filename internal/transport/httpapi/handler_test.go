@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	nooparchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/fallback"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
@@ -56,9 +57,7 @@ func TestHandleWebhookNotificationSignatureValidation(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := newTestHandler(config.Config{
-				WhatsAppAppSecret: testCase.appSecret,
-			})
+			handler := newTestHandler(config.Config{WhatsAppAppSecret: testCase.appSecret})
 
 			request := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
 			if testCase.signatureHeader != "" {
@@ -82,6 +81,7 @@ func newTestHandler(cfg config.Config) *Handler {
 		fallback.NewGenerator(),
 		noop.NewSender(logger),
 		memory.NewConversationRepository(12),
+		nooparchive.NewMessageArchive(),
 	)
 
 	return NewHandler(service, cfg, logger)

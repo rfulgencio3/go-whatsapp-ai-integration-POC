@@ -3,6 +3,7 @@ package chatbot
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
 )
@@ -12,6 +13,7 @@ type Service struct {
 	replyGenerator         ReplyGenerator
 	messageSender          MessageSender
 	conversationRepository ConversationRepository
+	messageArchive         MessageArchive
 }
 
 func NewService(
@@ -19,12 +21,14 @@ func NewService(
 	replyGenerator ReplyGenerator,
 	messageSender MessageSender,
 	conversationRepository ConversationRepository,
+	messageArchive MessageArchive,
 ) *Service {
 	return &Service{
 		allowedPhoneNumber:     chat.NormalizePhoneNumber(allowedPhoneNumber),
 		replyGenerator:         replyGenerator,
 		messageSender:          messageSender,
 		conversationRepository: conversationRepository,
+		messageArchive:         messageArchive,
 	}
 }
 
@@ -36,20 +40,45 @@ func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage strin
 		return "", chat.ErrPhoneNumberNotAllowed
 	}
 
-	history := s.conversationRepository.AppendMessage(normalizedPhoneNumber, chat.Message{
-		Role: chat.UserRole,
-		Text: normalizedMessage,
-	})
+	history, err := s.conversationRepository.GetMessages(ctx, normalizedPhoneNumber)
+	if err != nil {
+		return "", err
+	}
+
+	userChatMessage := chat.Message{
+		Role:      chat.UserRole,
+		Text:      normalizedMessage,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
+		return "", err
+	}
+
+	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
+		return "", err
+	}
+
+	history = append(history, userChatMessage)
 
 	reply, err := s.replyGenerator.GenerateReply(ctx, history)
 	if err != nil {
 		return "", err
 	}
 
-	s.conversationRepository.AppendMessage(normalizedPhoneNumber, chat.Message{
-		Role: chat.AssistantRole,
-		Text: reply,
-	})
+	assistantChatMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      reply,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
+		return "", err
+	}
+
+	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
+		return "", err
+	}
 
 	return reply, nil
 }

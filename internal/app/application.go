@@ -1,16 +1,21 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	nooparchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/noop"
+	postgresarchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/postgres"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/whatsapp"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/fallback"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/gemini"
-	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
+	memoryrepo "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
+	redisrepo "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/redis"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/config"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/transport/httpapi"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/usecase/chatbot"
@@ -21,11 +26,37 @@ type Application struct {
 	logger *log.Logger
 }
 
-func New(cfg config.Config) *Application {
+func New(cfg config.Config) (*Application, error) {
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 	httpClient := &http.Client{Timeout: cfg.RequestTimeout}
+	startupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	conversationRepository := memory.NewConversationRepository(cfg.ConversationHistoryLimit)
+	conversationRepository := chatbot.ConversationRepository(memoryrepo.NewConversationRepository(cfg.ConversationHistoryLimit))
+	if cfg.HasRedisConfig() {
+		redisConversationRepository, err := redisrepo.NewConversationRepository(
+			startupContext,
+			cfg.RedisURL,
+			cfg.ConversationHistoryLimit,
+			cfg.RedisConversationTTL,
+			cfg.RedisKeyPrefix,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("initialize redis conversation repository: %w", err)
+		}
+
+		conversationRepository = redisConversationRepository
+	}
+
+	messageArchive := chatbot.MessageArchive(nooparchive.NewMessageArchive())
+	if cfg.HasDatabaseConfig() {
+		postgresMessageArchive, err := postgresarchive.NewMessageArchive(startupContext, cfg.DatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("initialize postgres message archive: %w", err)
+		}
+
+		messageArchive = postgresMessageArchive
+	}
 
 	var replyGenerator chatbot.ReplyGenerator
 	if cfg.HasGeminiConfig() {
@@ -46,6 +77,7 @@ func New(cfg config.Config) *Application {
 		replyGenerator,
 		messageSender,
 		conversationRepository,
+		messageArchive,
 	)
 
 	handler := httpapi.NewHandler(chatbotService, cfg, logger)
@@ -59,7 +91,7 @@ func New(cfg config.Config) *Application {
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		logger: logger,
-	}
+	}, nil
 }
 
 func (a *Application) Run() error {

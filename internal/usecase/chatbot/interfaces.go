@@ -15,5 +15,10 @@ type MessageSender interface {
 }
 
 type ConversationRepository interface {
-	AppendMessage(phoneNumber string, message chat.Message) []chat.Message
+	GetMessages(ctx context.Context, phoneNumber string) ([]chat.Message, error)
+	AppendMessage(ctx context.Context, phoneNumber string, message chat.Message) error
+}
+
+type MessageArchive interface {
+	RecordMessage(ctx context.Context, phoneNumber string, message chat.Message) error
 }
