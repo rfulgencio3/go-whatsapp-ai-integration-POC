@@ -2,8 +2,9 @@ package main
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/app"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/config"
@@ -12,10 +13,12 @@ import (
 func main() {
 	application, err := app.New(config.Load())
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 
 	if err := application.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }

@@ -3,9 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"time"
 
 	nooparchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/noop"
@@ -19,34 +17,29 @@ import (
 	memoryrepo "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
 	redisrepo "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/redis"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/config"
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/observability"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/transport/httpapi"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/usecase/chatbot"
 )
 
 type Application struct {
 	server *http.Server
-	logger *log.Logger
+	logger *observability.Logger
 }
 
 func New(cfg config.Config) (*Application, error) {
-	logger := log.New(os.Stdout, "", log.LstdFlags)
+	logger := observability.NewLogger()
+	metrics := observability.NewMetrics()
 	httpClient := &http.Client{Timeout: cfg.RequestTimeout}
 	startupContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	conversationRepository := chatbot.ConversationRepository(memoryrepo.NewConversationRepository(cfg.ConversationHistoryLimit))
 	if cfg.HasRedisConfig() {
-		redisConversationRepository, err := redisrepo.NewConversationRepository(
-			startupContext,
-			cfg.RedisURL,
-			cfg.ConversationHistoryLimit,
-			cfg.RedisConversationTTL,
-			cfg.RedisKeyPrefix,
-		)
+		redisConversationRepository, err := redisrepo.NewConversationRepository(startupContext, cfg.RedisURL, cfg.ConversationHistoryLimit, cfg.RedisConversationTTL, cfg.RedisKeyPrefix)
 		if err != nil {
 			return nil, fmt.Errorf("initialize redis conversation repository: %w", err)
 		}
-
 		conversationRepository = redisConversationRepository
 	}
 
@@ -56,24 +49,15 @@ func New(cfg config.Config) (*Application, error) {
 		if err != nil {
 			return nil, fmt.Errorf("initialize postgres message archive: %w", err)
 		}
-
 		messageArchive = postgresMessageArchive
 	}
 
 	messageDeduplicator := chatbot.MessageDeduplicator(memoryidempotency.NewStore(cfg.WebhookIdempotencyTTL, cfg.WebhookProcessingTTL))
 	if cfg.HasRedisConfig() {
-		redisMessageDeduplicator, err := redisidempotency.NewStore(
-			startupContext,
-			cfg.RedisURL,
-			cfg.WebhookIdempotencyTTL,
-			cfg.WebhookProcessingTTL,
-			cfg.RedisIdempotencyPrefix,
-			cfg.RedisProcessingPrefix,
-		)
+		redisMessageDeduplicator, err := redisidempotency.NewStore(startupContext, cfg.RedisURL, cfg.WebhookIdempotencyTTL, cfg.WebhookProcessingTTL, cfg.RedisIdempotencyPrefix, cfg.RedisProcessingPrefix)
 		if err != nil {
 			return nil, fmt.Errorf("initialize redis message deduplicator: %w", err)
 		}
-
 		messageDeduplicator = redisMessageDeduplicator
 	}
 
@@ -91,30 +75,15 @@ func New(cfg config.Config) (*Application, error) {
 		messageSender = noop.NewSender(logger)
 	}
 
-	chatbotService := chatbot.NewService(
-		cfg.AllowedPhoneNumber,
-		replyGenerator,
-		messageSender,
-		conversationRepository,
-		messageArchive,
-		messageDeduplicator,
-	)
-
-	handler := httpapi.NewHandler(chatbotService, cfg, logger)
+	chatbotService := chatbot.NewService(cfg.AllowedPhoneNumber, replyGenerator, messageSender, conversationRepository, messageArchive, messageDeduplicator)
+	handler := httpapi.NewHandler(chatbotService, cfg, logger, metrics)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	return &Application{
-		server: &http.Server{
-			Addr:              cfg.HTTPAddress,
-			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
-		},
-		logger: logger,
-	}, nil
+	return &Application{server: &http.Server{Addr: cfg.HTTPAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}, logger: logger}, nil
 }
 
 func (a *Application) Run() error {
-	a.logger.Printf("server listening on %s", a.server.Addr)
+	a.logger.Info("server listening", map[string]any{"address": a.server.Addr})
 	return a.server.ListenAndServe()
 }

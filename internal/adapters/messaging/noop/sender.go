@@ -2,18 +2,23 @@ package noop
 
 import (
 	"context"
-	"log"
+
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/observability"
 )
 
 type Sender struct {
-	logger *log.Logger
+	logger *observability.Logger
 }
 
-func NewSender(logger *log.Logger) *Sender {
+func NewSender(logger *observability.Logger) *Sender {
 	return &Sender{logger: logger}
 }
 
 func (s *Sender) SendTextMessage(_ context.Context, phoneNumber, body string) error {
-	s.logger.Printf("whatsapp send skipped: missing configuration phone_number=%s reply=%q", phoneNumber, body)
+	s.logger.Info("whatsapp send skipped", map[string]any{
+		"reason":       "missing_configuration",
+		"phone_number": phoneNumber,
+		"reply":        body,
+	})
 	return nil
 }

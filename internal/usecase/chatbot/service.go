@@ -9,6 +9,10 @@ import (
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
 )
 
+type ProcessResult struct {
+	Duplicate bool
+}
+
 type Service struct {
 	allowedPhoneNumber     string
 	replyGenerator         ReplyGenerator
@@ -42,17 +46,9 @@ func NewService(
 	}
 }
 
-func (noopMessageDeduplicator) Acquire(_ context.Context, _ string) (bool, error) {
-	return true, nil
-}
-
-func (noopMessageDeduplicator) MarkProcessed(_ context.Context, _ string) error {
-	return nil
-}
-
-func (noopMessageDeduplicator) Release(_ context.Context, _ string) error {
-	return nil
-}
+func (noopMessageDeduplicator) Acquire(_ context.Context, _ string) (bool, error) { return true, nil }
+func (noopMessageDeduplicator) MarkProcessed(_ context.Context, _ string) error   { return nil }
+func (noopMessageDeduplicator) Release(_ context.Context, _ string) error         { return nil }
 
 func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage string) (string, error) {
 	normalizedPhoneNumber := chat.NormalizePhoneNumber(phoneNumber)
@@ -67,37 +63,24 @@ func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage strin
 		return "", err
 	}
 
-	userChatMessage := chat.Message{
-		Role:      chat.UserRole,
-		Text:      normalizedMessage,
-		CreatedAt: time.Now().UTC(),
-	}
-
+	userChatMessage := chat.Message{Role: chat.UserRole, Text: normalizedMessage, CreatedAt: time.Now().UTC()}
 	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
 		return "", err
 	}
-
 	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
 		return "", err
 	}
 
 	history = append(history, userChatMessage)
-
 	reply, err := s.replyGenerator.GenerateReply(ctx, history)
 	if err != nil {
 		return "", err
 	}
 
-	assistantChatMessage := chat.Message{
-		Role:      chat.AssistantRole,
-		Text:      reply,
-		CreatedAt: time.Now().UTC(),
-	}
-
+	assistantChatMessage := chat.Message{Role: chat.AssistantRole, Text: reply, CreatedAt: time.Now().UTC()}
 	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
 		return "", err
 	}
-
 	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
 		return "", err
 	}
@@ -105,39 +88,33 @@ func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage strin
 	return reply, nil
 }
 
-func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) error {
-	normalizedMessage := chat.IncomingMessage{
-		MessageID:   strings.TrimSpace(message.MessageID),
-		PhoneNumber: chat.NormalizePhoneNumber(message.PhoneNumber),
-		Text:        strings.TrimSpace(message.Text),
-	}
+func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (ProcessResult, error) {
+	normalizedMessage := chat.IncomingMessage{MessageID: strings.TrimSpace(message.MessageID), PhoneNumber: chat.NormalizePhoneNumber(message.PhoneNumber), Text: strings.TrimSpace(message.Text)}
 
 	if normalizedMessage.MessageID == "" {
-		return s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text)
+		return ProcessResult{}, s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text)
 	}
 
 	acquired, err := s.messageDeduplicator.Acquire(ctx, normalizedMessage.MessageID)
 	if err != nil {
-		return fmt.Errorf("acquire message lock: %w", err)
+		return ProcessResult{}, fmt.Errorf("acquire message lock: %w", err)
 	}
-
 	if !acquired {
-		return nil
+		return ProcessResult{Duplicate: true}, nil
 	}
 
 	if err := s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text); err != nil {
 		if releaseErr := s.messageDeduplicator.Release(ctx, normalizedMessage.MessageID); releaseErr != nil {
-			return fmt.Errorf("%w (release message lock: %v)", err, releaseErr)
+			return ProcessResult{}, fmt.Errorf("%w (release message lock: %v)", err, releaseErr)
 		}
-
-		return err
+		return ProcessResult{}, err
 	}
 
 	if err := s.messageDeduplicator.MarkProcessed(ctx, normalizedMessage.MessageID); err != nil {
-		return fmt.Errorf("mark message processed: %w", err)
+		return ProcessResult{}, fmt.Errorf("mark message processed: %w", err)
 	}
 
-	return nil
+	return ProcessResult{}, nil
 }
 
 func (s *Service) processAndSend(ctx context.Context, phoneNumber, userMessage string) error {
@@ -145,6 +122,5 @@ func (s *Service) processAndSend(ctx context.Context, phoneNumber, userMessage s
 	if err != nil {
 		return err
 	}
-
 	return s.messageSender.SendTextMessage(ctx, chat.NormalizePhoneNumber(phoneNumber), reply)
 }

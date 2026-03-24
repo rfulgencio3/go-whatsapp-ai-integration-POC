@@ -13,6 +13,7 @@ The project is organized with a clean architecture style:
 ## Endpoints
 
 - `GET /healthz`: application health and loaded integration status.
+- `GET /metrics`: in-memory application counters for webhook and simulation flows.
 - `GET /webhook`: Meta webhook verification.
 - `POST /webhook`: receives WhatsApp notifications.
 - `POST /simulate`: tests the conversation flow without WhatsApp.
@@ -66,6 +67,18 @@ Behavior by configuration:
 - without `GEMINI_API_KEY`, the application falls back to a deterministic mock reply;
 - without WhatsApp sender credentials, outbound replies are logged instead of sent.
 
+## Metrics
+
+`GET /metrics` returns JSON counters for:
+
+- received webhook requests
+- extracted webhook messages
+- processed webhook messages
+- duplicate webhook messages skipped by idempotency
+- webhook processing failures
+- simulation requests
+- simulation failures
+
 ## Local simulation
 
 ```powershell
@@ -99,3 +112,4 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 - Postgres currently stores message history but not higher-level conversation/session entities.
 - Audio, image, and document messages are not supported.
 - The webhook still processes only text messages.
+- Metrics are in-memory only and reset on restart.
