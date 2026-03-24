@@ -100,7 +100,7 @@ func (h *Handler) handleWebhookNotification(responseWriter http.ResponseWriter, 
 
 	for _, message := range notification.ExtractIncomingMessages() {
 		if err := h.chatbotService.ProcessIncomingMessage(request.Context(), message); err != nil {
-			h.logger.Printf("process incoming message failed: phone_number=%s err=%v", message.PhoneNumber, err)
+			h.logger.Printf("process incoming message failed: phone_number=%s message_id=%s err=%v", message.PhoneNumber, message.MessageID, err)
 		}
 	}
 

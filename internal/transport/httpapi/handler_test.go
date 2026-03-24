@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	nooparchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/noop"
+	memoryidempotency "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/idempotency/memory"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/fallback"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
@@ -21,7 +22,7 @@ import (
 func TestHandleWebhookNotificationSignatureValidation(t *testing.T) {
 	t.Parallel()
 
-	payload := `{"entry":[{"changes":[{"value":{"contacts":[{"wa_id":"5511999999999"}],"messages":[{"from":"5511999999999","type":"text","text":{"body":"hello"}}]}}]}]}`
+	payload := `{"entry":[{"changes":[{"value":{"contacts":[{"wa_id":"5511999999999"}],"messages":[{"id":"wamid.1","from":"5511999999999","type":"text","text":{"body":"hello"}}]}}]}]}`
 
 	testCases := []struct {
 		name            string
@@ -82,6 +83,7 @@ func newTestHandler(cfg config.Config) *Handler {
 		noop.NewSender(logger),
 		memory.NewConversationRepository(12),
 		nooparchive.NewMessageArchive(),
+		memoryidempotency.NewStore(config.DefaultWebhookIdempotencyTTL, config.DefaultWebhookProcessingTTL),
 	)
 
 	return NewHandler(service, cfg, logger)

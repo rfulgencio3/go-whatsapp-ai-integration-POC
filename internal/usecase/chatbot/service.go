@@ -2,6 +2,7 @@ package chatbot
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,7 +15,10 @@ type Service struct {
 	messageSender          MessageSender
 	conversationRepository ConversationRepository
 	messageArchive         MessageArchive
+	messageDeduplicator    MessageDeduplicator
 }
+
+type noopMessageDeduplicator struct{}
 
 func NewService(
 	allowedPhoneNumber string,
@@ -22,14 +26,32 @@ func NewService(
 	messageSender MessageSender,
 	conversationRepository ConversationRepository,
 	messageArchive MessageArchive,
+	messageDeduplicator MessageDeduplicator,
 ) *Service {
+	if messageDeduplicator == nil {
+		messageDeduplicator = noopMessageDeduplicator{}
+	}
+
 	return &Service{
 		allowedPhoneNumber:     chat.NormalizePhoneNumber(allowedPhoneNumber),
 		replyGenerator:         replyGenerator,
 		messageSender:          messageSender,
 		conversationRepository: conversationRepository,
 		messageArchive:         messageArchive,
+		messageDeduplicator:    messageDeduplicator,
 	}
+}
+
+func (noopMessageDeduplicator) Acquire(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
+func (noopMessageDeduplicator) MarkProcessed(_ context.Context, _ string) error {
+	return nil
+}
+
+func (noopMessageDeduplicator) Release(_ context.Context, _ string) error {
+	return nil
 }
 
 func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage string) (string, error) {
@@ -84,10 +106,45 @@ func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage strin
 }
 
 func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) error {
-	reply, err := s.BuildReply(ctx, message.PhoneNumber, message.Text)
+	normalizedMessage := chat.IncomingMessage{
+		MessageID:   strings.TrimSpace(message.MessageID),
+		PhoneNumber: chat.NormalizePhoneNumber(message.PhoneNumber),
+		Text:        strings.TrimSpace(message.Text),
+	}
+
+	if normalizedMessage.MessageID == "" {
+		return s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text)
+	}
+
+	acquired, err := s.messageDeduplicator.Acquire(ctx, normalizedMessage.MessageID)
+	if err != nil {
+		return fmt.Errorf("acquire message lock: %w", err)
+	}
+
+	if !acquired {
+		return nil
+	}
+
+	if err := s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text); err != nil {
+		if releaseErr := s.messageDeduplicator.Release(ctx, normalizedMessage.MessageID); releaseErr != nil {
+			return fmt.Errorf("%w (release message lock: %v)", err, releaseErr)
+		}
+
+		return err
+	}
+
+	if err := s.messageDeduplicator.MarkProcessed(ctx, normalizedMessage.MessageID); err != nil {
+		return fmt.Errorf("mark message processed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) processAndSend(ctx context.Context, phoneNumber, userMessage string) error {
+	reply, err := s.BuildReply(ctx, phoneNumber, userMessage)
 	if err != nil {
 		return err
 	}
 
-	return s.messageSender.SendTextMessage(ctx, chat.NormalizePhoneNumber(message.PhoneNumber), reply)
+	return s.messageSender.SendTextMessage(ctx, chat.NormalizePhoneNumber(phoneNumber), reply)
 }

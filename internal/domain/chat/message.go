@@ -19,6 +19,7 @@ type Message struct {
 }
 
 type IncomingMessage struct {
+	MessageID   string
 	PhoneNumber string
 	Text        string
 }

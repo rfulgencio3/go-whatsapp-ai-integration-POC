@@ -22,3 +22,9 @@ type ConversationRepository interface {
 type MessageArchive interface {
 	RecordMessage(ctx context.Context, phoneNumber string, message chat.Message) error
 }
+
+type MessageDeduplicator interface {
+	Acquire(ctx context.Context, messageID string) (bool, error)
+	MarkProcessed(ctx context.Context, messageID string) error
+	Release(ctx context.Context, messageID string) error
+}

@@ -55,6 +55,7 @@ type WhatsAppContact struct {
 }
 
 type WhatsAppMessage struct {
+	ID   string               `json:"id"`
 	From string               `json:"from"`
 	Type string               `json:"type"`
 	Text WhatsAppTextEnvelope `json:"text"`
@@ -74,6 +75,11 @@ func (n WhatsAppWebhookNotification) ExtractIncomingMessages() []chat.IncomingMe
 					continue
 				}
 
+				messageID := strings.TrimSpace(incomingMessage.ID)
+				if messageID == "" {
+					continue
+				}
+
 				body := strings.TrimSpace(incomingMessage.Text.Body)
 				if body == "" {
 					continue
@@ -88,6 +94,7 @@ func (n WhatsAppWebhookNotification) ExtractIncomingMessages() []chat.IncomingMe
 				}
 
 				messages = append(messages, chat.IncomingMessage{
+					MessageID:   messageID,
 					PhoneNumber: phoneNumber,
 					Text:        body,
 				})

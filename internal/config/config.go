@@ -15,6 +15,10 @@ const (
 	DefaultConversationHistoryLimit = 12
 	DefaultRedisConversationTTL     = 24 * time.Hour
 	DefaultRedisKeyPrefix           = "chat:history"
+	DefaultWebhookIdempotencyTTL    = 72 * time.Hour
+	DefaultWebhookProcessingTTL     = 2 * time.Minute
+	DefaultRedisIdempotencyPrefix   = "webhook:idempotency"
+	DefaultRedisProcessingPrefix    = "webhook:processing"
 )
 
 type Config struct {
@@ -32,6 +36,10 @@ type Config struct {
 	RedisURL                 string
 	RedisConversationTTL     time.Duration
 	RedisKeyPrefix           string
+	WebhookIdempotencyTTL    time.Duration
+	WebhookProcessingTTL     time.Duration
+	RedisIdempotencyPrefix   string
+	RedisProcessingPrefix    string
 	DatabaseURL              string
 }
 
@@ -51,6 +59,10 @@ func Load() Config {
 		RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 		RedisConversationTTL:     getDurationEnv("REDIS_CONVERSATION_TTL", DefaultRedisConversationTTL),
 		RedisKeyPrefix:           getEnv("REDIS_KEY_PREFIX", DefaultRedisKeyPrefix),
+		WebhookIdempotencyTTL:    getDurationEnv("WEBHOOK_IDEMPOTENCY_TTL", DefaultWebhookIdempotencyTTL),
+		WebhookProcessingTTL:     getDurationEnv("WEBHOOK_PROCESSING_TTL", DefaultWebhookProcessingTTL),
+		RedisIdempotencyPrefix:   getEnv("REDIS_IDEMPOTENCY_PREFIX", DefaultRedisIdempotencyPrefix),
+		RedisProcessingPrefix:    getEnv("REDIS_PROCESSING_PREFIX", DefaultRedisProcessingPrefix),
 		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 	}
 }

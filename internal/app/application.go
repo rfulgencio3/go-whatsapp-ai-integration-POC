@@ -10,6 +10,8 @@ import (
 
 	nooparchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/noop"
 	postgresarchive "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/archive/postgres"
+	memoryidempotency "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/idempotency/memory"
+	redisidempotency "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/idempotency/redis"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/whatsapp"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/fallback"
@@ -58,6 +60,23 @@ func New(cfg config.Config) (*Application, error) {
 		messageArchive = postgresMessageArchive
 	}
 
+	messageDeduplicator := chatbot.MessageDeduplicator(memoryidempotency.NewStore(cfg.WebhookIdempotencyTTL, cfg.WebhookProcessingTTL))
+	if cfg.HasRedisConfig() {
+		redisMessageDeduplicator, err := redisidempotency.NewStore(
+			startupContext,
+			cfg.RedisURL,
+			cfg.WebhookIdempotencyTTL,
+			cfg.WebhookProcessingTTL,
+			cfg.RedisIdempotencyPrefix,
+			cfg.RedisProcessingPrefix,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("initialize redis message deduplicator: %w", err)
+		}
+
+		messageDeduplicator = redisMessageDeduplicator
+	}
+
 	var replyGenerator chatbot.ReplyGenerator
 	if cfg.HasGeminiConfig() {
 		replyGenerator = gemini.NewClient(httpClient, cfg.GeminiAPIKey, cfg.GeminiModel, cfg.SystemPrompt)
@@ -78,6 +97,7 @@ func New(cfg config.Config) (*Application, error) {
 		messageSender,
 		conversationRepository,
 		messageArchive,
+		messageDeduplicator,
 	)
 
 	handler := httpapi.NewHandler(chatbotService, cfg, logger)

@@ -35,9 +35,13 @@ The project is organized with a clean architecture style:
 | `GEMINI_MODEL` | no | Gemini model, default `gemini-2.0-flash` |
 | `SYSTEM_PROMPT` | no | base system instruction for the assistant |
 | `ALLOWED_PHONE_NUMBER` | no | optional allowlist for a single phone number |
-| `REDIS_URL` | recommended | Redis connection string used for recent conversation history |
+| `REDIS_URL` | recommended | Redis connection string used for recent conversation history and webhook idempotency |
 | `REDIS_CONVERSATION_TTL` | no | TTL for Redis conversation keys, default `24h` |
 | `REDIS_KEY_PREFIX` | no | Redis key prefix for history, default `chat:history` |
+| `WEBHOOK_IDEMPOTENCY_TTL` | no | TTL for processed WhatsApp `message_id` keys, default `72h` |
+| `WEBHOOK_PROCESSING_TTL` | no | TTL for in-flight webhook processing locks, default `2m` |
+| `REDIS_IDEMPOTENCY_PREFIX` | no | Redis key prefix for processed webhook ids, default `webhook:idempotency` |
+| `REDIS_PROCESSING_PREFIX` | no | Redis key prefix for in-flight webhook locks, default `webhook:processing` |
 | `DATABASE_URL` | recommended | Postgres connection string used to archive all chat messages |
 
 ## Run
@@ -56,8 +60,8 @@ go run .
 
 Behavior by configuration:
 
-- without `REDIS_URL`, the application falls back to in-memory conversation history;
-- with `REDIS_URL`, recent conversation context is stored in Redis;
+- without `REDIS_URL`, the application falls back to in-memory conversation history and in-memory webhook idempotency;
+- with `REDIS_URL`, recent conversation context and webhook message deduplication are stored in Redis;
 - with `DATABASE_URL`, every user and assistant message is archived in Postgres;
 - without `GEMINI_API_KEY`, the application falls back to a deterministic mock reply;
 - without WhatsApp sender credentials, outbound replies are logged instead of sent.
@@ -85,14 +89,13 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 3. Use the same value in Meta and `WHATSAPP_VERIFY_TOKEN`.
 4. Set `WHATSAPP_APP_SECRET`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_PHONE_NUMBER_ID`.
 5. Set `GEMINI_API_KEY`.
-6. Configure `REDIS_URL` for hot conversation state.
+6. Configure `REDIS_URL` for hot conversation state and webhook idempotency.
 7. Configure `DATABASE_URL` for durable message history.
 8. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel.
 
 ## Current limitations
 
-- There is no message idempotency yet.
-- There is no retry, queue, or deduplication strategy.
-- `POST /webhook` supports Meta signature validation when `WHATSAPP_APP_SECRET` is configured.
+- There is no async queue or retry workflow yet.
 - Postgres currently stores message history but not higher-level conversation/session entities.
 - Audio, image, and document messages are not supported.
+- The webhook still processes only text messages.
