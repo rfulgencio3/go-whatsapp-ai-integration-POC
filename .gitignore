@@ -1,0 +1,14 @@
+.gocache/
+.tmp-appdata/
+.tmp-localappdata/
+*.exe
+bin/
+dist/
+coverage.out
+*.test
+*.log
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store
