@@ -12,13 +12,30 @@ The project is organized with a clean architecture style:
 
 ## Endpoints
 
+- `GET /privacy-policy`: public privacy policy page for Meta configuration.
 - `GET /healthz`: application health and loaded integration status.
 - `GET /metrics`: in-memory application counters for webhook and simulation flows.
 - `GET /webhook`: Meta webhook verification.
-- `POST /webhook`: receives WhatsApp notifications.
+- `POST /webhook`: receives WhatsApp notifications and enqueues them for async processing.
 - `POST /simulate`: tests the conversation flow without WhatsApp.
 - `GET /swagger`: Swagger UI.
 - `GET /swagger/openapi.json`: OpenAPI document.
+
+## Privacy Policy URL
+
+After deployment, use this URL in Meta:
+
+```text
+https://<your-domain>/privacy-policy
+```
+
+For Railway, this will usually look like:
+
+```text
+https://<your-app>.up.railway.app/privacy-policy
+```
+
+A Markdown source version of the same policy is stored in `PRIVACY_POLICY.md`.
 
 ## Environment variables
 
@@ -43,6 +60,10 @@ The project is organized with a clean architecture style:
 | `WEBHOOK_PROCESSING_TTL` | no | TTL for in-flight webhook processing locks, default `2m` |
 | `REDIS_IDEMPOTENCY_PREFIX` | no | Redis key prefix for processed webhook ids, default `webhook:idempotency` |
 | `REDIS_PROCESSING_PREFIX` | no | Redis key prefix for in-flight webhook locks, default `webhook:processing` |
+| `WEBHOOK_QUEUE_WORKERS` | no | worker count for async webhook processing, default `4` |
+| `WEBHOOK_QUEUE_BUFFER_SIZE` | no | in-memory queue capacity, default `128` |
+| `WEBHOOK_QUEUE_MAX_RETRIES` | no | retry attempts after the first failed processing attempt, default `3` |
+| `WEBHOOK_QUEUE_RETRY_DELAY` | no | base retry delay for async processing, default `2s` |
 | `DATABASE_URL` | recommended | Postgres connection string used to archive all chat messages |
 
 ## Run
@@ -63,6 +84,8 @@ Behavior by configuration:
 
 - without `REDIS_URL`, the application falls back to in-memory conversation history and in-memory webhook idempotency;
 - with `REDIS_URL`, recent conversation context and webhook message deduplication are stored in Redis;
+- webhook requests are acknowledged after enqueue, and the actual processing happens in background workers;
+- failed webhook jobs are retried asynchronously using the configured worker queue policy;
 - with `DATABASE_URL`, every user and assistant message is archived in Postgres;
 - without `GEMINI_API_KEY`, the application falls back to a deterministic mock reply;
 - without WhatsApp sender credentials, outbound replies are logged instead of sent.
@@ -73,9 +96,12 @@ Behavior by configuration:
 
 - received webhook requests
 - extracted webhook messages
+- successfully enqueued webhook messages
+- enqueue failures
 - processed webhook messages
 - duplicate webhook messages skipped by idempotency
-- webhook processing failures
+- async retry attempts
+- webhook processing failures after retries are exhausted
 - simulation requests
 - simulation failures
 
@@ -104,11 +130,12 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 5. Set `GEMINI_API_KEY`.
 6. Configure `REDIS_URL` for hot conversation state and webhook idempotency.
 7. Configure `DATABASE_URL` for durable message history.
-8. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel.
+8. Publish and use `https://<your-domain>/privacy-policy` in the Meta Privacy Policy URL field.
+9. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel when needed.
 
 ## Current limitations
 
-- There is no async queue or retry workflow yet.
+- The async queue is in-memory only and is not durable across process restarts.
 - Postgres currently stores message history but not higher-level conversation/session entities.
 - Audio, image, and document messages are not supported.
 - The webhook still processes only text messages.

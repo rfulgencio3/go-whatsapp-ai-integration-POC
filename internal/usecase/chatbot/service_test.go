@@ -223,6 +223,9 @@ func TestProcessIncomingMessageReleasesMessageIDOnFailure(t *testing.T) {
 	if _, ok := deduplicator.processing[message.MessageID]; ok {
 		t.Fatalf("expected message id %q to be released after failure", message.MessageID)
 	}
+	if len(repository.store["5511999999999"]) != 0 {
+		t.Fatalf("expected no history to be persisted on failed processing")
+	}
 
 	secondResult, err := service.ProcessIncomingMessage(context.Background(), message)
 	if err != nil {
@@ -236,5 +239,24 @@ func TestProcessIncomingMessageReleasesMessageIDOnFailure(t *testing.T) {
 	}
 	if _, ok := deduplicator.processed[message.MessageID]; !ok {
 		t.Fatalf("expected message id %q to be marked as processed after retry", message.MessageID)
+	}
+}
+
+func TestProcessIncomingMessageDoesNotPersistOnSendFailure(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{err: errors.New("send failure")}
+	deduplicator := newStubMessageDeduplicator()
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{MessageID: "wamid.sendfail", PhoneNumber: "5511999999999", Text: "hello"})
+	if err == nil || err.Error() != "send failure" {
+		t.Fatalf("expected send failure, got %v", err)
+	}
+	if len(repository.store["5511999999999"]) != 0 {
+		t.Fatalf("expected no persisted history after send failure")
+	}
+	if len(archive.recorded) != 0 {
+		t.Fatalf("expected no archived messages after send failure")
 	}
 }

@@ -51,45 +51,24 @@ func (noopMessageDeduplicator) MarkProcessed(_ context.Context, _ string) error 
 func (noopMessageDeduplicator) Release(_ context.Context, _ string) error         { return nil }
 
 func (s *Service) BuildReply(ctx context.Context, phoneNumber, userMessage string) (string, error) {
-	normalizedPhoneNumber := chat.NormalizePhoneNumber(phoneNumber)
-	normalizedMessage := strings.TrimSpace(userMessage)
-
-	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
-		return "", chat.ErrPhoneNumberNotAllowed
-	}
-
-	history, err := s.conversationRepository.GetMessages(ctx, normalizedPhoneNumber)
+	normalizedPhoneNumber, userChatMessage, assistantChatMessage, err := s.buildReplyArtifacts(ctx, phoneNumber, userMessage)
 	if err != nil {
 		return "", err
 	}
 
-	userChatMessage := chat.Message{Role: chat.UserRole, Text: normalizedMessage, CreatedAt: time.Now().UTC()}
-	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
-		return "", err
-	}
-	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, userChatMessage); err != nil {
+	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
 		return "", err
 	}
 
-	history = append(history, userChatMessage)
-	reply, err := s.replyGenerator.GenerateReply(ctx, history)
-	if err != nil {
-		return "", err
-	}
-
-	assistantChatMessage := chat.Message{Role: chat.AssistantRole, Text: reply, CreatedAt: time.Now().UTC()}
-	if err := s.conversationRepository.AppendMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
-		return "", err
-	}
-	if err := s.messageArchive.RecordMessage(ctx, normalizedPhoneNumber, assistantChatMessage); err != nil {
-		return "", err
-	}
-
-	return reply, nil
+	return assistantChatMessage.Text, nil
 }
 
 func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (ProcessResult, error) {
-	normalizedMessage := chat.IncomingMessage{MessageID: strings.TrimSpace(message.MessageID), PhoneNumber: chat.NormalizePhoneNumber(message.PhoneNumber), Text: strings.TrimSpace(message.Text)}
+	normalizedMessage := chat.IncomingMessage{
+		MessageID:   strings.TrimSpace(message.MessageID),
+		PhoneNumber: chat.NormalizePhoneNumber(message.PhoneNumber),
+		Text:        strings.TrimSpace(message.Text),
+	}
 
 	if normalizedMessage.MessageID == "" {
 		return ProcessResult{}, s.processAndSend(ctx, normalizedMessage.PhoneNumber, normalizedMessage.Text)
@@ -118,9 +97,55 @@ func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.Incom
 }
 
 func (s *Service) processAndSend(ctx context.Context, phoneNumber, userMessage string) error {
-	reply, err := s.BuildReply(ctx, phoneNumber, userMessage)
+	normalizedPhoneNumber, userChatMessage, assistantChatMessage, err := s.buildReplyArtifacts(ctx, phoneNumber, userMessage)
 	if err != nil {
 		return err
 	}
-	return s.messageSender.SendTextMessage(ctx, chat.NormalizePhoneNumber(phoneNumber), reply)
+
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
+		return err
+	}
+
+	return s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage)
+}
+
+func (s *Service) buildReplyArtifacts(ctx context.Context, phoneNumber, userMessage string) (string, chat.Message, chat.Message, error) {
+	normalizedPhoneNumber := chat.NormalizePhoneNumber(phoneNumber)
+	normalizedMessage := strings.TrimSpace(userMessage)
+
+	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
+		return "", chat.Message{}, chat.Message{}, chat.ErrPhoneNumberNotAllowed
+	}
+
+	history, err := s.conversationRepository.GetMessages(ctx, normalizedPhoneNumber)
+	if err != nil {
+		return "", chat.Message{}, chat.Message{}, err
+	}
+
+	userChatMessage := chat.Message{Role: chat.UserRole, Text: normalizedMessage, CreatedAt: time.Now().UTC()}
+	historyForReply := append(append([]chat.Message(nil), history...), userChatMessage)
+
+	reply, err := s.replyGenerator.GenerateReply(ctx, historyForReply)
+	if err != nil {
+		return "", chat.Message{}, chat.Message{}, err
+	}
+
+	assistantChatMessage := chat.Message{Role: chat.AssistantRole, Text: reply, CreatedAt: time.Now().UTC()}
+	return normalizedPhoneNumber, userChatMessage, assistantChatMessage, nil
+}
+
+func (s *Service) persistConversation(ctx context.Context, phoneNumber string, userChatMessage, assistantChatMessage chat.Message) error {
+	if err := s.conversationRepository.AppendMessage(ctx, phoneNumber, userChatMessage); err != nil {
+		return err
+	}
+	if err := s.messageArchive.RecordMessage(ctx, phoneNumber, userChatMessage); err != nil {
+		return err
+	}
+	if err := s.conversationRepository.AppendMessage(ctx, phoneNumber, assistantChatMessage); err != nil {
+		return err
+	}
+	if err := s.messageArchive.RecordMessage(ctx, phoneNumber, assistantChatMessage); err != nil {
+		return err
+	}
+	return nil
 }

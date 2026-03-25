@@ -12,6 +12,7 @@ import (
 	redisidempotency "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/idempotency/redis"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/noop"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/messaging/whatsapp"
+	memoryqueue "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/queue/memory"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/fallback"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/reply/gemini"
 	memoryrepo "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/repository/memory"
@@ -76,7 +77,8 @@ func New(cfg config.Config) (*Application, error) {
 	}
 
 	chatbotService := chatbot.NewService(cfg.AllowedPhoneNumber, replyGenerator, messageSender, conversationRepository, messageArchive, messageDeduplicator)
-	handler := httpapi.NewHandler(chatbotService, cfg, logger, metrics)
+	messageQueue := memoryqueue.NewQueue(cfg.WebhookQueueWorkers, cfg.WebhookQueueBufferSize, cfg.WebhookQueueMaxRetries, cfg.WebhookQueueRetryDelay, chatbotService, logger, metrics)
+	handler := httpapi.NewHandler(chatbotService, messageQueue, cfg, logger, metrics)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 

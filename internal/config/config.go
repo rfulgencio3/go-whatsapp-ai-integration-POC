@@ -19,6 +19,10 @@ const (
 	DefaultWebhookProcessingTTL     = 2 * time.Minute
 	DefaultRedisIdempotencyPrefix   = "webhook:idempotency"
 	DefaultRedisProcessingPrefix    = "webhook:processing"
+	DefaultWebhookQueueWorkers      = 4
+	DefaultWebhookQueueBufferSize   = 128
+	DefaultWebhookQueueMaxRetries   = 3
+	DefaultWebhookQueueRetryDelay   = 2 * time.Second
 )
 
 type Config struct {
@@ -40,6 +44,10 @@ type Config struct {
 	WebhookProcessingTTL     time.Duration
 	RedisIdempotencyPrefix   string
 	RedisProcessingPrefix    string
+	WebhookQueueWorkers      int
+	WebhookQueueBufferSize   int
+	WebhookQueueMaxRetries   int
+	WebhookQueueRetryDelay   time.Duration
 	DatabaseURL              string
 }
 
@@ -63,6 +71,10 @@ func Load() Config {
 		WebhookProcessingTTL:     getDurationEnv("WEBHOOK_PROCESSING_TTL", DefaultWebhookProcessingTTL),
 		RedisIdempotencyPrefix:   getEnv("REDIS_IDEMPOTENCY_PREFIX", DefaultRedisIdempotencyPrefix),
 		RedisProcessingPrefix:    getEnv("REDIS_PROCESSING_PREFIX", DefaultRedisProcessingPrefix),
+		WebhookQueueWorkers:      getIntEnv("WEBHOOK_QUEUE_WORKERS", DefaultWebhookQueueWorkers),
+		WebhookQueueBufferSize:   getIntEnv("WEBHOOK_QUEUE_BUFFER_SIZE", DefaultWebhookQueueBufferSize),
+		WebhookQueueMaxRetries:   getIntEnvAllowZero("WEBHOOK_QUEUE_MAX_RETRIES", DefaultWebhookQueueMaxRetries),
+		WebhookQueueRetryDelay:   getDurationEnv("WEBHOOK_QUEUE_RETRY_DELAY", DefaultWebhookQueueRetryDelay),
 		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 	}
 }
@@ -117,6 +129,20 @@ func getIntEnv(key string, fallback int) int {
 
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getIntEnvAllowZero(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 

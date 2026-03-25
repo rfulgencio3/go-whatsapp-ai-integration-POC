@@ -15,21 +15,23 @@ import (
 
 type Handler struct {
 	chatbotService *chatbot.Service
+	messageQueue   chatbot.MessageQueue
 	config         config.Config
 	logger         *observability.Logger
 	metrics        *observability.Metrics
 }
 
-func NewHandler(chatbotService *chatbot.Service, cfg config.Config, logger *observability.Logger, metrics *observability.Metrics) *Handler {
+func NewHandler(chatbotService *chatbot.Service, messageQueue chatbot.MessageQueue, cfg config.Config, logger *observability.Logger, metrics *observability.Metrics) *Handler {
 	if metrics == nil {
 		metrics = observability.NewMetrics()
 	}
 
-	return &Handler{chatbotService: chatbotService, config: cfg, logger: logger, metrics: metrics}
+	return &Handler{chatbotService: chatbotService, messageQueue: messageQueue, config: cfg, logger: logger, metrics: metrics}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleRoot)
+	mux.HandleFunc("/privacy-policy", h.handlePrivacyPolicy)
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.HandleFunc("/metrics", h.handleMetrics)
 	mux.HandleFunc("/webhook", h.handleWebhook)
@@ -111,19 +113,12 @@ func (h *Handler) handleWebhookNotification(responseWriter http.ResponseWriter, 
 	h.metrics.AddWebhookMessages(len(messages))
 
 	for _, message := range messages {
-		result, err := h.chatbotService.ProcessIncomingMessage(request.Context(), message)
-		if err != nil {
-			h.metrics.IncWebhookFailures()
-			h.logger.Error("process incoming message failed", map[string]any{"phone_number": message.PhoneNumber, "message_id": message.MessageID, "error": err.Error()})
-			continue
+		if err := h.messageQueue.Enqueue(request.Context(), message); err != nil {
+			h.metrics.IncWebhookEnqueueFailure()
+			h.logger.Error("enqueue webhook message failed", map[string]any{"phone_number": message.PhoneNumber, "message_id": message.MessageID, "error": err.Error()})
+			writeError(responseWriter, http.StatusInternalServerError, "failed to enqueue webhook message")
+			return
 		}
-		if result.Duplicate {
-			h.metrics.IncWebhookDuplicates()
-			h.logger.Info("duplicate webhook message skipped", map[string]any{"phone_number": message.PhoneNumber, "message_id": message.MessageID})
-			continue
-		}
-		h.metrics.IncWebhookProcessed()
-		h.logger.Info("webhook message processed", map[string]any{"phone_number": message.PhoneNumber, "message_id": message.MessageID})
 	}
 
 	writeJSON(responseWriter, http.StatusOK, WebhookResponse{Status: "received"})

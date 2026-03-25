@@ -28,3 +28,11 @@ type MessageDeduplicator interface {
 	MarkProcessed(ctx context.Context, messageID string) error
 	Release(ctx context.Context, messageID string) error
 }
+
+type MessageProcessor interface {
+	ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (ProcessResult, error)
+}
+
+type MessageQueue interface {
+	Enqueue(ctx context.Context, message chat.IncomingMessage) error
+}
