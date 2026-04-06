@@ -7,6 +7,10 @@ import (
 	domain "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/agro"
 )
 
+type Interpreter interface {
+	Interpret(ctx context.Context, input InterpretationInput) (InterpretationResult, error)
+}
+
 type FarmMembershipRepository interface {
 	FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]domain.FarmMembership, error)
 }
@@ -33,4 +37,25 @@ type BusinessEventRepository interface {
 
 type AssistantMessageRepository interface {
 	Create(ctx context.Context, message *domain.AssistantMessage) error
+}
+
+type InterpretationInput struct {
+	MessageType domain.MessageType
+	Text        string
+	OccurredAt  time.Time
+}
+
+type InterpretationResult struct {
+	NormalizedIntent     string
+	Category             string
+	Subcategory          string
+	Description          string
+	Confidence           float64
+	RequiresConfirmation bool
+	Amount               *float64
+	Currency             string
+	Quantity             *float64
+	Unit                 string
+	OccurredAt           *time.Time
+	RawOutputJSON        string
 }

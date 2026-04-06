@@ -123,10 +123,13 @@ func New(cfg config.Config) (*Application, error) {
 		messageProcessor = agrousecase.NewCaptureService(
 			logger,
 			chatbotService,
+			agrousecase.NewRuleBasedInterpreter(),
 			storagepostgres.NewFarmMembershipRepository(database),
 			storagepostgres.NewConversationRepository(database),
 			storagepostgres.NewSourceMessageRepository(database),
 			storagepostgres.NewTranscriptionRepository(database),
+			storagepostgres.NewInterpretationRunRepository(database),
+			storagepostgres.NewBusinessEventRepository(database),
 			storagepostgres.NewAssistantMessageRepository(database),
 		)
 	}

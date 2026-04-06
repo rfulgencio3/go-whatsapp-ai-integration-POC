@@ -14,22 +14,28 @@ import (
 )
 
 type CaptureService struct {
-	logger            *observability.Logger
-	downstream        chatbot.MessageProcessor
-	farmMemberships   FarmMembershipRepository
-	conversations     ConversationRepository
-	sourceMessages    SourceMessageRepository
-	transcriptions    TranscriptionRepository
-	assistantMessages AssistantMessageRepository
+	logger             *observability.Logger
+	downstream         chatbot.MessageProcessor
+	interpreter        Interpreter
+	farmMemberships    FarmMembershipRepository
+	conversations      ConversationRepository
+	sourceMessages     SourceMessageRepository
+	transcriptions     TranscriptionRepository
+	interpretationRuns InterpretationRunRepository
+	businessEvents     BusinessEventRepository
+	assistantMessages  AssistantMessageRepository
 }
 
 func NewCaptureService(
 	logger *observability.Logger,
 	downstream chatbot.MessageProcessor,
+	interpreter Interpreter,
 	farmMemberships FarmMembershipRepository,
 	conversations ConversationRepository,
 	sourceMessages SourceMessageRepository,
 	transcriptions TranscriptionRepository,
+	interpretationRuns InterpretationRunRepository,
+	businessEvents BusinessEventRepository,
 	assistantMessages AssistantMessageRepository,
 ) *CaptureService {
 	if logger == nil {
@@ -37,13 +43,16 @@ func NewCaptureService(
 	}
 
 	return &CaptureService{
-		logger:            logger,
-		downstream:        downstream,
-		farmMemberships:   farmMemberships,
-		conversations:     conversations,
-		sourceMessages:    sourceMessages,
-		transcriptions:    transcriptions,
-		assistantMessages: assistantMessages,
+		logger:             logger,
+		downstream:         downstream,
+		interpreter:        interpreter,
+		farmMemberships:    farmMemberships,
+		conversations:      conversations,
+		sourceMessages:     sourceMessages,
+		transcriptions:     transcriptions,
+		interpretationRuns: interpretationRuns,
+		businessEvents:     businessEvents,
+		assistantMessages:  assistantMessages,
 	}
 }
 
@@ -127,7 +136,11 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, result
 	if err := s.sourceMessages.Create(ctx, &sourceMessage); err != nil {
 		return err
 	}
-	if err := s.persistTranscription(ctx, sourceMessage.ID, result.IncomingMessage, receivedAt); err != nil {
+	transcriptionID, err := s.persistTranscription(ctx, sourceMessage.ID, result.IncomingMessage, receivedAt)
+	if err != nil {
+		return err
+	}
+	if err := s.persistInterpretation(ctx, memberships[0].FarmID, sourceMessage, transcriptionID, receivedAt); err != nil {
 		return err
 	}
 	if err := s.persistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, result.AssistantMessage, receivedAt); err != nil {
@@ -161,9 +174,9 @@ func toDomainMessageType(messageType chat.MessageType) domain.MessageType {
 	}
 }
 
-func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessageID string, incomingMessage chat.IncomingMessage, createdAt time.Time) error {
+func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessageID string, incomingMessage chat.IncomingMessage, createdAt time.Time) (string, error) {
 	if s.transcriptions == nil || strings.TrimSpace(incomingMessage.TranscriptionID) == "" {
-		return nil
+		return "", nil
 	}
 
 	transcription := domain.Transcription{
@@ -177,7 +190,11 @@ func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessage
 		CreatedAt:       createdAt,
 	}
 
-	return s.transcriptions.Create(ctx, &transcription)
+	if err := s.transcriptions.Create(ctx, &transcription); err != nil {
+		return "", err
+	}
+
+	return transcription.ID, nil
 }
 
 func (s *CaptureService) persistAssistantMessage(ctx context.Context, conversationID, sourceMessageID string, assistantMessage chat.Message, createdAt time.Time) error {
@@ -197,4 +214,63 @@ func (s *CaptureService) persistAssistantMessage(ctx context.Context, conversati
 	}
 
 	return s.assistantMessages.Create(ctx, &message)
+}
+
+func (s *CaptureService) persistInterpretation(ctx context.Context, farmID string, sourceMessage domain.SourceMessage, transcriptionID string, occurredAt time.Time) error {
+	if s.interpreter == nil || s.interpretationRuns == nil {
+		return nil
+	}
+
+	interpretation, err := s.interpreter.Interpret(ctx, InterpretationInput{
+		MessageType: sourceMessage.MessageType,
+		Text:        sourceMessage.RawText,
+		OccurredAt:  occurredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(interpretation.NormalizedIntent) == "" {
+		return nil
+	}
+
+	run := domain.InterpretationRun{
+		ID:                   uuid.NewString(),
+		SourceMessageID:      sourceMessage.ID,
+		TranscriptionID:      strings.TrimSpace(transcriptionID),
+		ModelProvider:        interpreterProvider,
+		ModelName:            interpreterModel,
+		PromptVersion:        promptVersion,
+		NormalizedIntent:     interpretation.NormalizedIntent,
+		Confidence:           interpretation.Confidence,
+		RequiresConfirmation: interpretation.RequiresConfirmation,
+		RawOutputJSON:        interpretation.RawOutputJSON,
+		CreatedAt:            occurredAt,
+	}
+	if err := s.interpretationRuns.Create(ctx, &run); err != nil {
+		return err
+	}
+	if s.businessEvents == nil {
+		return nil
+	}
+
+	event := domain.BusinessEvent{
+		ID:                  uuid.NewString(),
+		FarmID:              farmID,
+		SourceMessageID:     sourceMessage.ID,
+		InterpretationRunID: run.ID,
+		Category:            interpretation.Category,
+		Subcategory:         interpretation.Subcategory,
+		OccurredAt:          interpretation.OccurredAt,
+		Description:         interpretation.Description,
+		Amount:              interpretation.Amount,
+		Currency:            interpretation.Currency,
+		Quantity:            interpretation.Quantity,
+		Unit:                interpretation.Unit,
+		Status:              domain.EventStatusDraft,
+		ConfirmedByUser:     false,
+		CreatedAt:           occurredAt,
+		UpdatedAt:           occurredAt,
+	}
+
+	return s.businessEvents.Create(ctx, &event)
 }

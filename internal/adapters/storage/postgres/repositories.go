@@ -26,6 +26,14 @@ type TranscriptionRepository struct {
 	database *sql.DB
 }
 
+type InterpretationRunRepository struct {
+	database *sql.DB
+}
+
+type BusinessEventRepository struct {
+	database *sql.DB
+}
+
 type AssistantMessageRepository struct {
 	database *sql.DB
 }
@@ -44,6 +52,14 @@ func NewSourceMessageRepository(database *sql.DB) *SourceMessageRepository {
 
 func NewTranscriptionRepository(database *sql.DB) *TranscriptionRepository {
 	return &TranscriptionRepository{database: database}
+}
+
+func NewInterpretationRunRepository(database *sql.DB) *InterpretationRunRepository {
+	return &InterpretationRunRepository{database: database}
+}
+
+func NewBusinessEventRepository(database *sql.DB) *BusinessEventRepository {
+	return &BusinessEventRepository{database: database}
 }
 
 func NewAssistantMessageRepository(database *sql.DB) *AssistantMessageRepository {
@@ -264,6 +280,113 @@ func (r *TranscriptionRepository) Create(ctx context.Context, transcription *agr
 	return nil
 }
 
+func (r *InterpretationRunRepository) Create(ctx context.Context, run *agro.InterpretationRun) error {
+	if run == nil {
+		return fmt.Errorf("create interpretation run: nil run")
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO interpretation_runs (
+			id,
+			source_message_id,
+			transcription_id,
+			model_provider,
+			model_name,
+			prompt_version,
+			normalized_intent,
+			confidence,
+			requires_confirmation,
+			raw_output_json,
+			created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		run.ID,
+		run.SourceMessageID,
+		nullIfEmpty(run.TranscriptionID),
+		run.ModelProvider,
+		run.ModelName,
+		run.PromptVersion,
+		run.NormalizedIntent,
+		run.Confidence,
+		run.RequiresConfirmation,
+		run.RawOutputJSON,
+		run.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert interpretation run: %w", err)
+	}
+
+	return nil
+}
+
+func (r *BusinessEventRepository) Create(ctx context.Context, event *agro.BusinessEvent) error {
+	if event == nil {
+		return fmt.Errorf("create business event: nil event")
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	if event.UpdatedAt.IsZero() {
+		event.UpdatedAt = event.CreatedAt
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO business_events (
+			id,
+			farm_id,
+			source_message_id,
+			interpretation_run_id,
+			category,
+			subcategory,
+			occurred_at,
+			description,
+			amount,
+			currency,
+			quantity,
+			unit,
+			animal_code,
+			lot_code,
+			paddock_code,
+			counterparty_name,
+			status,
+			confirmed_by_user,
+			confirmed_at,
+			created_at,
+			updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+		event.ID,
+		event.FarmID,
+		event.SourceMessageID,
+		event.InterpretationRunID,
+		event.Category,
+		event.Subcategory,
+		nullTime(event.OccurredAt),
+		event.Description,
+		nullFloat64(event.Amount),
+		nullIfEmpty(event.Currency),
+		nullFloat64(event.Quantity),
+		nullIfEmpty(event.Unit),
+		nullIfEmpty(event.AnimalCode),
+		nullIfEmpty(event.LotCode),
+		nullIfEmpty(event.PaddockCode),
+		nullIfEmpty(event.CounterpartyName),
+		string(event.Status),
+		event.ConfirmedByUser,
+		nullTime(event.ConfirmedAt),
+		event.CreatedAt,
+		event.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert business event: %w", err)
+	}
+
+	return nil
+}
+
 func (r *AssistantMessageRepository) Create(ctx context.Context, message *agro.AssistantMessage) error {
 	if message == nil {
 		return fmt.Errorf("create assistant message: nil message")
@@ -306,4 +429,20 @@ func nullIfEmpty(value string) any {
 	}
 
 	return value
+}
+
+func nullTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+
+	return *value
+}
+
+func nullFloat64(value *float64) any {
+	if value == nil {
+		return nil
+	}
+
+	return *value
 }
