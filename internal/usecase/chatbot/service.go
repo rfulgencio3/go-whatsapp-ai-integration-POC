@@ -11,7 +11,11 @@ import (
 )
 
 type ProcessResult struct {
-	Duplicate bool
+	Duplicate        bool
+	PhoneNumber      string
+	IncomingMessage  chat.IncomingMessage
+	UserMessage      chat.Message
+	AssistantMessage chat.Message
 }
 
 type Service struct {
@@ -84,7 +88,7 @@ func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.Incom
 	normalizedMessage := normalizeIncomingMessage(message)
 
 	if normalizedMessage.MessageID == "" {
-		return ProcessResult{}, s.processAndSend(ctx, normalizedMessage)
+		return s.processAndSend(ctx, normalizedMessage)
 	}
 
 	acquired, err := s.messageDeduplicator.Acquire(ctx, normalizedMessage.MessageID)
@@ -95,7 +99,8 @@ func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.Incom
 		return ProcessResult{Duplicate: true}, nil
 	}
 
-	if err := s.processAndSend(ctx, normalizedMessage); err != nil {
+	result, err := s.processAndSend(ctx, normalizedMessage)
+	if err != nil {
 		if releaseErr := s.messageDeduplicator.Release(ctx, normalizedMessage.MessageID); releaseErr != nil {
 			return ProcessResult{}, fmt.Errorf("%w (release message lock: %v)", err, releaseErr)
 		}
@@ -106,16 +111,16 @@ func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.Incom
 		return ProcessResult{}, fmt.Errorf("mark message processed: %w", err)
 	}
 
-	return ProcessResult{}, nil
+	return result, nil
 }
 
-func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.IncomingMessage) error {
+func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.IncomingMessage) (ProcessResult, error) {
 	preparedMessage, err := s.incomingPreprocessor.Prepare(ctx, incomingMessage)
 	if err != nil {
 		if errors.Is(err, chat.ErrUnsupportedMessageType) {
 			return s.sendUnsupportedReply(ctx, incomingMessage)
 		}
-		return err
+		return ProcessResult{}, err
 	}
 	if strings.TrimSpace(preparedMessage.Text) == "" {
 		return s.sendUnsupportedReply(ctx, preparedMessage)
@@ -123,14 +128,23 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 
 	normalizedPhoneNumber, userChatMessage, assistantChatMessage, err := s.buildReplyArtifacts(ctx, preparedMessage)
 	if err != nil {
-		return err
+		return ProcessResult{}, err
 	}
 
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
-		return err
+		return ProcessResult{}, err
 	}
 
-	return s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage)
+	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
+		return ProcessResult{}, err
+	}
+
+	return ProcessResult{
+		PhoneNumber:      normalizedPhoneNumber,
+		IncomingMessage:  preparedMessage,
+		UserMessage:      userChatMessage,
+		AssistantMessage: assistantChatMessage,
+	}, nil
 }
 
 func (s *Service) buildReplyArtifacts(ctx context.Context, incomingMessage chat.IncomingMessage) (string, chat.Message, chat.Message, error) {
@@ -164,10 +178,10 @@ func (s *Service) buildReplyArtifacts(ctx context.Context, incomingMessage chat.
 	return normalizedPhoneNumber, userChatMessage, assistantChatMessage, nil
 }
 
-func (s *Service) sendUnsupportedReply(ctx context.Context, incomingMessage chat.IncomingMessage) error {
+func (s *Service) sendUnsupportedReply(ctx context.Context, incomingMessage chat.IncomingMessage) (ProcessResult, error) {
 	normalizedPhoneNumber := chat.NormalizePhoneNumber(incomingMessage.PhoneNumber)
 	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
-		return chat.ErrPhoneNumberNotAllowed
+		return ProcessResult{}, chat.ErrPhoneNumberNotAllowed
 	}
 
 	userChatMessage := buildUserChatMessage(incomingMessage, unsupportedInboundSummary(incomingMessage))
@@ -180,9 +194,18 @@ func (s *Service) sendUnsupportedReply(ctx context.Context, incomingMessage chat
 	}
 
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
-		return err
+		return ProcessResult{}, err
 	}
-	return s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage)
+	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
+		return ProcessResult{}, err
+	}
+
+	return ProcessResult{
+		PhoneNumber:      normalizedPhoneNumber,
+		IncomingMessage:  incomingMessage,
+		UserMessage:      userChatMessage,
+		AssistantMessage: assistantChatMessage,
+	}, nil
 }
 
 func (s *Service) persistConversation(ctx context.Context, phoneNumber string, userChatMessage, assistantChatMessage chat.Message) error {

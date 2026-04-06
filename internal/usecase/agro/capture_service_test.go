@@ -52,6 +52,32 @@ func (s *stubSourceMessageRepository) Create(_ context.Context, message *domain.
 	return nil
 }
 
+type stubTranscriptionRepository struct {
+	transcriptions []domain.Transcription
+	err            error
+}
+
+func (s *stubTranscriptionRepository) Create(_ context.Context, transcription *domain.Transcription) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.transcriptions = append(s.transcriptions, *transcription)
+	return nil
+}
+
+type stubAssistantMessageRepository struct {
+	messages []domain.AssistantMessage
+	err      error
+}
+
+func (s *stubAssistantMessageRepository) Create(_ context.Context, message *domain.AssistantMessage) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.messages = append(s.messages, *message)
+	return nil
+}
+
 func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) {
 	t.Parallel()
 
@@ -62,9 +88,25 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 		},
 	}
 	sourceMessages := &stubSourceMessageRepository{}
+	transcriptions := &stubTranscriptionRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
 	service := NewCaptureService(
 		nil,
-		stubMessageProcessor{},
+		stubMessageProcessor{result: chatbot.ProcessResult{
+			PhoneNumber: "5511999999999",
+			IncomingMessage: chat.IncomingMessage{
+				MessageID:   "msg-1",
+				PhoneNumber: "5511999999999",
+				Text:        "Comprei 10 sacos de racao por 850 reais",
+				Type:        chat.MessageTypeText,
+				Provider:    "whatsmeow",
+			},
+			AssistantMessage: chat.Message{
+				Role:     chat.AssistantRole,
+				Text:     "Registrei a sua mensagem.",
+				Provider: "whatsmeow",
+			},
+		}},
 		stubFarmMembershipRepository{
 			memberships: []domain.FarmMembership{
 				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
@@ -72,6 +114,8 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 		},
 		conversations,
 		sourceMessages,
+		transcriptions,
+		assistantMessages,
 	)
 
 	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
@@ -97,6 +141,15 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 	if got := sourceMessages.messages[0].SenderPhoneNumber; got != "5511999999999" {
 		t.Fatalf("expected normalized phone number, got %q", got)
 	}
+	if len(transcriptions.transcriptions) != 0 {
+		t.Fatalf("expected no transcription for plain text, got %d", len(transcriptions.transcriptions))
+	}
+	if len(assistantMessages.messages) != 1 {
+		t.Fatalf("expected one assistant message, got %d", len(assistantMessages.messages))
+	}
+	if got := assistantMessages.messages[0].SourceMessageID; got != sourceMessages.messages[0].ID {
+		t.Fatalf("expected assistant message to link source message, got %q", got)
+	}
 }
 
 func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
@@ -104,6 +157,8 @@ func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
 
 	conversations := &stubConversationRepository{}
 	sourceMessages := &stubSourceMessageRepository{}
+	transcriptions := &stubTranscriptionRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
 	service := NewCaptureService(
 		nil,
 		stubMessageProcessor{result: chatbot.ProcessResult{Duplicate: true}},
@@ -114,6 +169,8 @@ func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
 		},
 		conversations,
 		sourceMessages,
+		transcriptions,
+		assistantMessages,
 	)
 
 	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
@@ -131,5 +188,78 @@ func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
 	}
 	if len(sourceMessages.messages) != 0 {
 		t.Fatalf("expected no source messages for duplicate, got %d", len(sourceMessages.messages))
+	}
+	if len(transcriptions.transcriptions) != 0 {
+		t.Fatalf("expected no transcriptions for duplicate, got %d", len(transcriptions.transcriptions))
+	}
+	if len(assistantMessages.messages) != 0 {
+		t.Fatalf("expected no assistant messages for duplicate, got %d", len(assistantMessages.messages))
+	}
+}
+
+func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	transcriptions := &stubTranscriptionRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	service := NewCaptureService(
+		nil,
+		stubMessageProcessor{result: chatbot.ProcessResult{
+			PhoneNumber: "5511999999999",
+			IncomingMessage: chat.IncomingMessage{
+				MessageID:             "audio-1",
+				PhoneNumber:           "5511999999999",
+				Text:                  "a vaca 32 foi inseminada hoje",
+				Type:                  chat.MessageTypeAudio,
+				Provider:              "twilio",
+				TranscriptionID:       "external-transcription-id",
+				TranscriptionLanguage: "pt-BR",
+				AudioDurationSeconds:  11.2,
+			},
+			AssistantMessage: chat.Message{
+				Role:     chat.AssistantRole,
+				Text:     "Entendi. Vou registrar esse evento.",
+				Provider: "twilio",
+			},
+		}},
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		conversations,
+		sourceMessages,
+		transcriptions,
+		assistantMessages,
+	)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "audio-1",
+		PhoneNumber: "5511999999999",
+		Type:        chat.MessageTypeAudio,
+		Provider:    "twilio",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if len(sourceMessages.messages) != 1 {
+		t.Fatalf("expected one source message, got %d", len(sourceMessages.messages))
+	}
+	if len(transcriptions.transcriptions) != 1 {
+		t.Fatalf("expected one transcription, got %d", len(transcriptions.transcriptions))
+	}
+	if got := transcriptions.transcriptions[0].ProviderRef; got != "external-transcription-id" {
+		t.Fatalf("expected transcription provider ref to be preserved, got %q", got)
+	}
+	if got := transcriptions.transcriptions[0].SourceMessageID; got != sourceMessages.messages[0].ID {
+		t.Fatalf("expected transcription to link source message, got %q", got)
 	}
 }

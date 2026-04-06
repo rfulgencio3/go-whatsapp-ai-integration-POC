@@ -22,6 +22,10 @@ type SourceMessageRepository struct {
 	database *sql.DB
 }
 
+type TranscriptionRepository struct {
+	database *sql.DB
+}
+
 type AssistantMessageRepository struct {
 	database *sql.DB
 }
@@ -36,6 +40,10 @@ func NewConversationRepository(database *sql.DB) *ConversationRepository {
 
 func NewSourceMessageRepository(database *sql.DB) *SourceMessageRepository {
 	return &SourceMessageRepository{database: database}
+}
+
+func NewTranscriptionRepository(database *sql.DB) *TranscriptionRepository {
+	return &TranscriptionRepository{database: database}
 }
 
 func NewAssistantMessageRepository(database *sql.DB) *AssistantMessageRepository {
@@ -111,6 +119,20 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 		&conversation.UpdatedAt,
 	)
 	if err == nil {
+		if !lastMessageAt.IsZero() {
+			if _, updateErr := r.database.ExecContext(
+				ctx,
+				`UPDATE conversations
+				SET last_message_at = $2, updated_at = $2
+				WHERE id = $1`,
+				conversation.ID,
+				lastMessageAt,
+			); updateErr != nil {
+				return agro.Conversation{}, fmt.Errorf("update conversation timestamp: %w", updateErr)
+			}
+			conversation.LastMessageAt = lastMessageAt
+			conversation.UpdatedAt = lastMessageAt
+		}
 		return conversation, nil
 	}
 	if err != nil && err != sql.ErrNoRows {
@@ -201,6 +223,42 @@ func (r *SourceMessageRepository) Create(ctx context.Context, message *agro.Sour
 	)
 	if err != nil {
 		return fmt.Errorf("insert source message: %w", err)
+	}
+
+	return nil
+}
+
+func (r *TranscriptionRepository) Create(ctx context.Context, transcription *agro.Transcription) error {
+	if transcription == nil {
+		return fmt.Errorf("create transcription: nil transcription")
+	}
+	if transcription.CreatedAt.IsZero() {
+		transcription.CreatedAt = time.Now().UTC()
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO transcriptions (
+			id,
+			source_message_id,
+			provider,
+			provider_ref,
+			transcript_text,
+			language,
+			duration_seconds,
+			created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		transcription.ID,
+		transcription.SourceMessageID,
+		transcription.Provider,
+		nullIfEmpty(transcription.ProviderRef),
+		transcription.TranscriptText,
+		nullIfEmpty(transcription.Language),
+		transcription.DurationSeconds,
+		transcription.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert transcription: %w", err)
 	}
 
 	return nil

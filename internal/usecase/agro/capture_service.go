@@ -14,11 +14,13 @@ import (
 )
 
 type CaptureService struct {
-	logger          *observability.Logger
-	downstream      chatbot.MessageProcessor
-	farmMemberships FarmMembershipRepository
-	conversations   ConversationRepository
-	sourceMessages  SourceMessageRepository
+	logger            *observability.Logger
+	downstream        chatbot.MessageProcessor
+	farmMemberships   FarmMembershipRepository
+	conversations     ConversationRepository
+	sourceMessages    SourceMessageRepository
+	transcriptions    TranscriptionRepository
+	assistantMessages AssistantMessageRepository
 }
 
 func NewCaptureService(
@@ -27,17 +29,21 @@ func NewCaptureService(
 	farmMemberships FarmMembershipRepository,
 	conversations ConversationRepository,
 	sourceMessages SourceMessageRepository,
+	transcriptions TranscriptionRepository,
+	assistantMessages AssistantMessageRepository,
 ) *CaptureService {
 	if logger == nil {
 		logger = observability.NewLogger()
 	}
 
 	return &CaptureService{
-		logger:          logger,
-		downstream:      downstream,
-		farmMemberships: farmMemberships,
-		conversations:   conversations,
-		sourceMessages:  sourceMessages,
+		logger:            logger,
+		downstream:        downstream,
+		farmMemberships:   farmMemberships,
+		conversations:     conversations,
+		sourceMessages:    sourceMessages,
+		transcriptions:    transcriptions,
+		assistantMessages: assistantMessages,
 	}
 }
 
@@ -51,11 +57,11 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		return result, err
 	}
 
-	if err := s.captureInboundMessage(ctx, message); err != nil {
+	if err := s.captureProcessedInteraction(ctx, result); err != nil {
 		s.logger.Error("agro inbound capture failed", map[string]any{
-			"phone_number": domain.NormalizePhoneNumber(message.PhoneNumber),
-			"message_id":   strings.TrimSpace(message.MessageID),
-			"provider":     strings.TrimSpace(message.Provider),
+			"phone_number": domain.NormalizePhoneNumber(result.PhoneNumber),
+			"message_id":   strings.TrimSpace(result.IncomingMessage.MessageID),
+			"provider":     strings.TrimSpace(result.IncomingMessage.Provider),
 			"error":        err.Error(),
 		})
 	}
@@ -63,12 +69,12 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	return result, nil
 }
 
-func (s *CaptureService) captureInboundMessage(ctx context.Context, message chat.IncomingMessage) error {
+func (s *CaptureService) captureProcessedInteraction(ctx context.Context, result chatbot.ProcessResult) error {
 	if s.farmMemberships == nil || s.conversations == nil || s.sourceMessages == nil {
 		return nil
 	}
 
-	phoneNumber := domain.NormalizePhoneNumber(message.PhoneNumber)
+	phoneNumber := domain.NormalizePhoneNumber(result.PhoneNumber)
 	if phoneNumber == "" {
 		return nil
 	}
@@ -82,14 +88,14 @@ func (s *CaptureService) captureInboundMessage(ctx context.Context, message chat
 	case 0:
 		s.logger.Info("agro context not found for inbound phone", map[string]any{
 			"phone_number": phoneNumber,
-			"provider":     strings.TrimSpace(message.Provider),
+			"provider":     strings.TrimSpace(result.IncomingMessage.Provider),
 		})
 		return nil
 	case 1:
 	default:
 		s.logger.Info("agro context is ambiguous for inbound phone", map[string]any{
 			"phone_number":      phoneNumber,
-			"provider":          strings.TrimSpace(message.Provider),
+			"provider":          strings.TrimSpace(result.IncomingMessage.Provider),
 			"matching_contexts": len(memberships),
 		})
 		return nil
@@ -104,21 +110,31 @@ func (s *CaptureService) captureInboundMessage(ctx context.Context, message chat
 	sourceMessage := domain.SourceMessage{
 		ID:                uuid.NewString(),
 		ConversationID:    conversation.ID,
-		Provider:          providerOrDefault(message.Provider),
-		ProviderMessageID: strings.TrimSpace(message.MessageID),
+		Provider:          providerOrDefault(result.IncomingMessage.Provider),
+		ProviderMessageID: strings.TrimSpace(result.IncomingMessage.MessageID),
 		SenderPhoneNumber: phoneNumber,
-		MessageType:       toDomainMessageType(message.Type),
-		RawText:           strings.TrimSpace(message.Text),
+		MessageType:       toDomainMessageType(result.IncomingMessage.Type),
+		RawText:           strings.TrimSpace(result.IncomingMessage.Text),
 		ReceivedAt:        receivedAt,
 		CreatedAt:         receivedAt,
 	}
-	if len(message.MediaAttachments) > 0 {
-		sourceMessage.MediaURL = strings.TrimSpace(message.MediaAttachments[0].URL)
-		sourceMessage.MediaContentType = strings.TrimSpace(message.MediaAttachments[0].ContentType)
-		sourceMessage.MediaFilename = strings.TrimSpace(message.MediaAttachments[0].Filename)
+	if len(result.IncomingMessage.MediaAttachments) > 0 {
+		sourceMessage.MediaURL = strings.TrimSpace(result.IncomingMessage.MediaAttachments[0].URL)
+		sourceMessage.MediaContentType = strings.TrimSpace(result.IncomingMessage.MediaAttachments[0].ContentType)
+		sourceMessage.MediaFilename = strings.TrimSpace(result.IncomingMessage.MediaAttachments[0].Filename)
 	}
 
-	return s.sourceMessages.Create(ctx, &sourceMessage)
+	if err := s.sourceMessages.Create(ctx, &sourceMessage); err != nil {
+		return err
+	}
+	if err := s.persistTranscription(ctx, sourceMessage.ID, result.IncomingMessage, receivedAt); err != nil {
+		return err
+	}
+	if err := s.persistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, result.AssistantMessage, receivedAt); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func providerOrDefault(provider string) string {
@@ -143,4 +159,42 @@ func toDomainMessageType(messageType chat.MessageType) domain.MessageType {
 	default:
 		return domain.MessageTypeUnsupported
 	}
+}
+
+func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessageID string, incomingMessage chat.IncomingMessage, createdAt time.Time) error {
+	if s.transcriptions == nil || strings.TrimSpace(incomingMessage.TranscriptionID) == "" {
+		return nil
+	}
+
+	transcription := domain.Transcription{
+		ID:              uuid.NewString(),
+		SourceMessageID: sourceMessageID,
+		Provider:        "transcription-api",
+		ProviderRef:     strings.TrimSpace(incomingMessage.TranscriptionID),
+		TranscriptText:  strings.TrimSpace(incomingMessage.Text),
+		Language:        strings.TrimSpace(incomingMessage.TranscriptionLanguage),
+		DurationSeconds: incomingMessage.AudioDurationSeconds,
+		CreatedAt:       createdAt,
+	}
+
+	return s.transcriptions.Create(ctx, &transcription)
+}
+
+func (s *CaptureService) persistAssistantMessage(ctx context.Context, conversationID, sourceMessageID string, assistantMessage chat.Message, createdAt time.Time) error {
+	if s.assistantMessages == nil || strings.TrimSpace(assistantMessage.Text) == "" {
+		return nil
+	}
+
+	message := domain.AssistantMessage{
+		ID:                uuid.NewString(),
+		ConversationID:    conversationID,
+		SourceMessageID:   sourceMessageID,
+		Provider:          providerOrDefault(assistantMessage.Provider),
+		ProviderMessageID: strings.TrimSpace(assistantMessage.ProviderMessageID),
+		ReplyType:         domain.ReplyTypeText,
+		Body:              strings.TrimSpace(assistantMessage.Text),
+		CreatedAt:         createdAt,
+	}
+
+	return s.assistantMessages.Create(ctx, &message)
 }

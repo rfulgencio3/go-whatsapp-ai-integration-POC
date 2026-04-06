@@ -126,6 +126,8 @@ func New(cfg config.Config) (*Application, error) {
 			storagepostgres.NewFarmMembershipRepository(database),
 			storagepostgres.NewConversationRepository(database),
 			storagepostgres.NewSourceMessageRepository(database),
+			storagepostgres.NewTranscriptionRepository(database),
+			storagepostgres.NewAssistantMessageRepository(database),
 		)
 	}
 	if whatsmeowClient != nil {
