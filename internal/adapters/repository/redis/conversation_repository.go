@@ -22,9 +22,18 @@ type ConversationRepository struct {
 }
 
 type storedMessage struct {
-	Role      chat.MessageRole `json:"role"`
-	Text      string           `json:"text"`
-	CreatedAt time.Time        `json:"created_at"`
+	Role                  chat.MessageRole `json:"role"`
+	Text                  string           `json:"text"`
+	CreatedAt             time.Time        `json:"created_at"`
+	Type                  chat.MessageType `json:"type,omitempty"`
+	Provider              string           `json:"provider,omitempty"`
+	ProviderMessageID     string           `json:"provider_message_id,omitempty"`
+	MediaURL              string           `json:"media_url,omitempty"`
+	MediaContentType      string           `json:"media_content_type,omitempty"`
+	MediaFilename         string           `json:"media_filename,omitempty"`
+	TranscriptionID       string           `json:"transcription_id,omitempty"`
+	TranscriptionLanguage string           `json:"transcription_language,omitempty"`
+	AudioDurationSeconds  float64          `json:"audio_duration_seconds,omitempty"`
 }
 
 func NewConversationRepository(ctx context.Context, redisURL string, historyLimit int, ttl time.Duration, keyPrefix string) (*ConversationRepository, error) {
@@ -64,9 +73,18 @@ func (r *ConversationRepository) GetMessages(ctx context.Context, phoneNumber st
 		}
 
 		messages = append(messages, chat.Message{
-			Role:      stored.Role,
-			Text:      stored.Text,
-			CreatedAt: stored.CreatedAt,
+			Role:                  stored.Role,
+			Text:                  stored.Text,
+			CreatedAt:             stored.CreatedAt,
+			Type:                  stored.Type,
+			Provider:              stored.Provider,
+			ProviderMessageID:     stored.ProviderMessageID,
+			MediaURL:              stored.MediaURL,
+			MediaContentType:      stored.MediaContentType,
+			MediaFilename:         stored.MediaFilename,
+			TranscriptionID:       stored.TranscriptionID,
+			TranscriptionLanguage: stored.TranscriptionLanguage,
+			AudioDurationSeconds:  stored.AudioDurationSeconds,
 		})
 	}
 
@@ -79,9 +97,18 @@ func (r *ConversationRepository) AppendMessage(ctx context.Context, phoneNumber 
 	}
 
 	payload, err := json.Marshal(storedMessage{
-		Role:      message.Role,
-		Text:      message.Text,
-		CreatedAt: message.CreatedAt,
+		Role:                  message.Role,
+		Text:                  message.Text,
+		CreatedAt:             message.CreatedAt,
+		Type:                  message.Type,
+		Provider:              message.Provider,
+		ProviderMessageID:     message.ProviderMessageID,
+		MediaURL:              message.MediaURL,
+		MediaContentType:      message.MediaContentType,
+		MediaFilename:         message.MediaFilename,
+		TranscriptionID:       message.TranscriptionID,
+		TranscriptionLanguage: message.TranscriptionLanguage,
+		AudioDurationSeconds:  message.AudioDurationSeconds,
 	})
 	if err != nil {
 		return fmt.Errorf("encode conversation message: %w", err)

@@ -23,6 +23,10 @@ const (
 	DefaultWebhookQueueBufferSize   = 128
 	DefaultWebhookQueueMaxRetries   = 3
 	DefaultWebhookQueueRetryDelay   = 2 * time.Second
+	DefaultTranscriptionMaxBytes    = 25 << 20
+	DefaultChannelProvider          = "auto"
+	DefaultWhatsmeowClientName      = "Chrome (Linux)"
+	DefaultWhatsmeowPairMode        = "qr"
 )
 
 type Config struct {
@@ -33,6 +37,10 @@ type Config struct {
 	WhatsAppAppSecret        string
 	WhatsAppAccessToken      string
 	WhatsAppPhoneNumberID    string
+	TwilioAccountSID         string
+	TwilioAuthToken          string
+	TwilioWhatsAppNumber     string
+	TwilioWebhookBaseURL     string
 	GeminiAPIKey             string
 	GeminiModel              string
 	SystemPrompt             string
@@ -49,6 +57,13 @@ type Config struct {
 	WebhookQueueMaxRetries   int
 	WebhookQueueRetryDelay   time.Duration
 	DatabaseURL              string
+	TranscriptionAPIBaseURL  string
+	TranscriptionMaxBytes    int64
+	ChannelProvider          string
+	WhatsmeowStoreDSN        string
+	WhatsmeowPairMode        string
+	WhatsmeowPairPhone       string
+	WhatsmeowClientName      string
 }
 
 func Load() Config {
@@ -60,6 +75,10 @@ func Load() Config {
 		WhatsAppAppSecret:        strings.TrimSpace(os.Getenv("WHATSAPP_APP_SECRET")),
 		WhatsAppAccessToken:      strings.TrimSpace(os.Getenv("WHATSAPP_ACCESS_TOKEN")),
 		WhatsAppPhoneNumberID:    strings.TrimSpace(os.Getenv("WHATSAPP_PHONE_NUMBER_ID")),
+		TwilioAccountSID:         strings.TrimSpace(os.Getenv("TWILIO_ACCOUNT_SID")),
+		TwilioAuthToken:          strings.TrimSpace(os.Getenv("TWILIO_AUTH_TOKEN")),
+		TwilioWhatsAppNumber:     strings.TrimSpace(os.Getenv("TWILIO_WHATSAPP_NUMBER")),
+		TwilioWebhookBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("TWILIO_WEBHOOK_BASE_URL")), "/"),
 		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		GeminiModel:              getEnv("GEMINI_MODEL", DefaultGeminiModel),
 		SystemPrompt:             getEnv("SYSTEM_PROMPT", DefaultSystemPrompt),
@@ -76,6 +95,13 @@ func Load() Config {
 		WebhookQueueMaxRetries:   getIntEnvAllowZero("WEBHOOK_QUEUE_MAX_RETRIES", DefaultWebhookQueueMaxRetries),
 		WebhookQueueRetryDelay:   getDurationEnv("WEBHOOK_QUEUE_RETRY_DELAY", DefaultWebhookQueueRetryDelay),
 		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		TranscriptionAPIBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("TRANSCRIPTION_API_BASE_URL")), "/"),
+		TranscriptionMaxBytes:    getInt64Env("TRANSCRIPTION_MAX_BYTES", DefaultTranscriptionMaxBytes),
+		ChannelProvider:          strings.ToLower(getEnv("WHATSAPP_CHANNEL_PROVIDER", DefaultChannelProvider)),
+		WhatsmeowStoreDSN:        strings.TrimSpace(getEnv("WHATSAPPMEOW_STORE_DSN", strings.TrimSpace(os.Getenv("DATABASE_URL")))),
+		WhatsmeowPairMode:        strings.ToLower(getEnv("WHATSAPPMEOW_PAIR_MODE", DefaultWhatsmeowPairMode)),
+		WhatsmeowPairPhone:       normalizePhoneNumber(strings.TrimSpace(os.Getenv("WHATSAPPMEOW_PAIR_PHONE"))),
+		WhatsmeowClientName:      getEnv("WHATSAPPMEOW_CLIENT_NAME", DefaultWhatsmeowClientName),
 	}
 }
 
@@ -84,11 +110,44 @@ func (c Config) HasGeminiConfig() bool {
 }
 
 func (c Config) HasWhatsAppSenderConfig() bool {
-	return c.WhatsAppAccessToken != "" && c.WhatsAppPhoneNumberID != ""
+	return c.HasWhatsmeowConfig() || c.HasTwilioSenderConfig() || (c.WhatsAppAccessToken != "" && c.WhatsAppPhoneNumberID != "")
 }
 
 func (c Config) HasWhatsAppWebhookConfig() bool {
-	return c.WhatsAppVerifyToken != ""
+	return c.WhatsAppVerifyToken != "" || c.HasTwilioWebhookConfig()
+}
+
+func (c Config) HasTwilioSenderConfig() bool {
+	return c.TwilioAccountSID != "" && c.TwilioAuthToken != "" && c.TwilioWhatsAppNumber != ""
+}
+
+func (c Config) HasTwilioWebhookConfig() bool {
+	return c.TwilioAuthToken != ""
+}
+
+func (c Config) HasTranscriptionConfig() bool {
+	return c.TranscriptionAPIBaseURL != ""
+}
+
+func (c Config) HasWhatsmeowConfig() bool {
+	if c.ChannelProvider == "whatsmeow" {
+		return c.WhatsmeowStoreDSN != ""
+	}
+
+	return false
+}
+
+func (c Config) MessagingProvider() string {
+	switch {
+	case c.HasWhatsmeowConfig():
+		return "whatsmeow"
+	case c.HasTwilioSenderConfig():
+		return "twilio"
+	case c.WhatsAppAccessToken != "" && c.WhatsAppPhoneNumberID != "":
+		return "meta"
+	default:
+		return "noop"
+	}
 }
 
 func (c Config) HasRedisConfig() bool {
@@ -143,6 +202,20 @@ func getIntEnvAllowZero(key string, fallback int) int {
 
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 0 {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getInt64Env(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 

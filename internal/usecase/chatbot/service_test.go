@@ -51,6 +51,21 @@ func (s *stubMessageSender) SendTextMessage(_ context.Context, phoneNumber, body
 	return s.err
 }
 
+type stubIncomingPreprocessor struct {
+	prepared chat.IncomingMessage
+	err      error
+}
+
+func (s *stubIncomingPreprocessor) Prepare(_ context.Context, message chat.IncomingMessage) (chat.IncomingMessage, error) {
+	if s.err != nil {
+		return chat.IncomingMessage{}, s.err
+	}
+	if s.prepared.PhoneNumber == "" {
+		return message, nil
+	}
+	return s.prepared, nil
+}
+
 type stubConversationRepository struct{ store map[string][]chat.Message }
 
 func newStubConversationRepository() *stubConversationRepository {
@@ -122,7 +137,7 @@ func TestBuildReply(t *testing.T) {
 	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{}
 	deduplicator := newStubMessageDeduplicator()
-	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, nil, repository, archive, deduplicator)
 
 	reply, err := service.BuildReply(context.Background(), "+55 (11) 99999-9999", "hello")
 	if err != nil {
@@ -148,7 +163,7 @@ func TestProcessIncomingMessageRejectsPhoneNumberOutsideAllowList(t *testing.T) 
 	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{}
 	deduplicator := newStubMessageDeduplicator()
-	service := NewService("5511888888888", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+	service := NewService("5511888888888", stubReplyGenerator{reply: "assistant reply"}, sender, nil, repository, archive, deduplicator)
 
 	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{MessageID: "wamid.1", PhoneNumber: "5511999999999", Text: "hello"})
 	if !errors.Is(err, chat.ErrPhoneNumberNotAllowed) {
@@ -161,7 +176,7 @@ func TestBuildReplyReturnsArchiveError(t *testing.T) {
 	archive := &stubMessageArchive{err: errors.New("archive failure")}
 	sender := &stubMessageSender{}
 	deduplicator := newStubMessageDeduplicator()
-	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, nil, repository, archive, deduplicator)
 
 	_, err := service.BuildReply(context.Background(), "5511999999999", "hello")
 	if err == nil || err.Error() != "archive failure" {
@@ -174,7 +189,7 @@ func TestProcessIncomingMessageSkipsDuplicateMessageID(t *testing.T) {
 	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{}
 	deduplicator := newStubMessageDeduplicator()
-	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, nil, repository, archive, deduplicator)
 	message := chat.IncomingMessage{MessageID: "wamid.123", PhoneNumber: "5511999999999", Text: "hello"}
 
 	firstResult, err := service.ProcessIncomingMessage(context.Background(), message)
@@ -210,7 +225,7 @@ func TestProcessIncomingMessageReleasesMessageIDOnFailure(t *testing.T) {
 	sender := &stubMessageSender{}
 	deduplicator := newStubMessageDeduplicator()
 	replyGenerator := &sequenceReplyGenerator{replies: []string{"", "assistant reply"}, errors: []error{errors.New("gemini failure"), nil}}
-	service := NewService("", replyGenerator, sender, repository, archive, deduplicator)
+	service := NewService("", replyGenerator, sender, nil, repository, archive, deduplicator)
 	message := chat.IncomingMessage{MessageID: "wamid.retry", PhoneNumber: "5511999999999", Text: "hello"}
 
 	firstResult, firstErr := service.ProcessIncomingMessage(context.Background(), message)
@@ -247,7 +262,7 @@ func TestProcessIncomingMessageDoesNotPersistOnSendFailure(t *testing.T) {
 	archive := &stubMessageArchive{}
 	sender := &stubMessageSender{err: errors.New("send failure")}
 	deduplicator := newStubMessageDeduplicator()
-	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, repository, archive, deduplicator)
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, nil, repository, archive, deduplicator)
 
 	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{MessageID: "wamid.sendfail", PhoneNumber: "5511999999999", Text: "hello"})
 	if err == nil || err.Error() != "send failure" {
@@ -258,5 +273,80 @@ func TestProcessIncomingMessageDoesNotPersistOnSendFailure(t *testing.T) {
 	}
 	if len(archive.recorded) != 0 {
 		t.Fatalf("expected no archived messages after send failure")
+	}
+}
+
+func TestProcessIncomingMessageUsesPreprocessedAudioTranscript(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{}
+	deduplicator := newStubMessageDeduplicator()
+	preprocessor := &stubIncomingPreprocessor{prepared: chat.IncomingMessage{
+		MessageID:             "SMaudio",
+		PhoneNumber:           "5511999999999",
+		Text:                  "transcribed audio",
+		Type:                  chat.MessageTypeAudio,
+		Provider:              "twilio",
+		TranscriptionID:       "transcription-123",
+		TranscriptionLanguage: "pt-BR",
+		AudioDurationSeconds:  9.5,
+		MediaAttachments: []chat.MediaAttachment{{
+			URL:         "https://api.twilio.com/media/1",
+			ContentType: "audio/ogg",
+		}},
+	}}
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, preprocessor, repository, archive, deduplicator)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "SMaudio",
+		PhoneNumber: "5511999999999",
+		Type:        chat.MessageTypeAudio,
+		Provider:    "twilio",
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	messages := repository.store["5511999999999"]
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages in history, got %d", len(messages))
+	}
+	if messages[0].Type != chat.MessageTypeAudio {
+		t.Fatalf("expected user message type audio, got %q", messages[0].Type)
+	}
+	if messages[0].TranscriptionID != "transcription-123" {
+		t.Fatalf("expected transcription id to be preserved, got %q", messages[0].TranscriptionID)
+	}
+	if sender.lastBody != "assistant reply" {
+		t.Fatalf("expected assistant reply to be sent, got %q", sender.lastBody)
+	}
+}
+
+func TestProcessIncomingMessageRepliesToUnsupportedMedia(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{}
+	deduplicator := newStubMessageDeduplicator()
+	preprocessor := &stubIncomingPreprocessor{err: chat.ErrUnsupportedMessageType}
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, sender, preprocessor, repository, archive, deduplicator)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "SMimage",
+		PhoneNumber: "5511999999999",
+		Type:        chat.MessageTypeImage,
+		Provider:    "twilio",
+		MediaAttachments: []chat.MediaAttachment{{
+			URL:         "https://api.twilio.com/media/2",
+			ContentType: "image/jpeg",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if sender.lastBody != unsupportedInboundReply {
+		t.Fatalf("expected unsupported media reply, got %q", sender.lastBody)
+	}
+	if len(archive.recorded) != 2 {
+		t.Fatalf("expected unsupported flow to be archived, got %d messages", len(archive.recorded))
 	}
 }

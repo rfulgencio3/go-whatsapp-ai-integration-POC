@@ -10,6 +10,9 @@ type HealthResponse struct {
 	Status                    string `json:"status"`
 	WhatsAppSenderConfigured  bool   `json:"whatsapp_sender_configured"`
 	WhatsAppWebhookConfigured bool   `json:"whatsapp_webhook_configured"`
+	TwilioConfigured          bool   `json:"twilio_configured"`
+	TranscriptionConfigured   bool   `json:"transcription_configured"`
+	MessagingProvider         string `json:"messaging_provider"`
 	GeminiConfigured          bool   `json:"gemini_configured"`
 	GeminiModel               string `json:"gemini_model"`
 }
@@ -97,6 +100,8 @@ func (n WhatsAppWebhookNotification) ExtractIncomingMessages() []chat.IncomingMe
 					MessageID:   messageID,
 					PhoneNumber: phoneNumber,
 					Text:        body,
+					Type:        chat.MessageTypeText,
+					Provider:    "meta",
 				})
 			}
 		}

@@ -1,6 +1,6 @@
 # go-whatsapp-ai-integration-POC
 
-`go-whatsapp-ai-integration-POC` exposes a Go HTTP API that receives WhatsApp webhook notifications, generates answers with Gemini, and sends the reply back to the user through the WhatsApp Cloud API.
+`go-whatsapp-ai-integration-POC` exposes a Go HTTP API that receives WhatsApp webhook notifications, generates answers with Gemini, and sends the reply back to the user through either the WhatsApp Cloud API or Twilio WhatsApp.
 
 The project is organized with a clean architecture style:
 
@@ -17,6 +17,7 @@ The project is organized with a clean architecture style:
 - `GET /metrics`: in-memory application counters for webhook and simulation flows.
 - `GET /webhook`: Meta webhook verification.
 - `POST /webhook`: receives WhatsApp notifications and enqueues them for async processing.
+- `POST /webhook/twilio`: receives Twilio WhatsApp webhook notifications and enqueues them for async processing.
 - `POST /simulate`: tests the conversation flow without WhatsApp.
 - `GET /swagger`: Swagger UI.
 - `GET /swagger/openapi.json`: OpenAPI document.
@@ -49,6 +50,10 @@ A Markdown source version of the same policy is stored in `PRIVACY_POLICY.md`.
 | `WHATSAPP_APP_SECRET` | recommended for real webhook | Meta app secret used to validate `X-Hub-Signature-256` on incoming webhook notifications |
 | `WHATSAPP_ACCESS_TOKEN` | for real replies | WhatsApp Cloud API bearer token |
 | `WHATSAPP_PHONE_NUMBER_ID` | for real replies | WhatsApp Cloud API phone number id |
+| `TWILIO_ACCOUNT_SID` | for Twilio | Twilio Account SID used for outbound sends and media download auth |
+| `TWILIO_AUTH_TOKEN` | for Twilio | Twilio Auth Token used for webhook signature validation and media download auth |
+| `TWILIO_WHATSAPP_NUMBER` | for Twilio outbound | Twilio WhatsApp sender, for example `whatsapp:+14155238886` |
+| `TWILIO_WEBHOOK_BASE_URL` | recommended for Twilio | public base URL used to validate `X-Twilio-Signature`; can be the exact webhook URL |
 | `GEMINI_API_KEY` | for real AI replies | Gemini API key |
 | `GEMINI_MODEL` | no | Gemini model, default `gemini-2.0-flash` |
 | `SYSTEM_PROMPT` | no | base system instruction for the assistant |
@@ -65,6 +70,8 @@ A Markdown source version of the same policy is stored in `PRIVACY_POLICY.md`.
 | `WEBHOOK_QUEUE_MAX_RETRIES` | no | retry attempts after the first failed processing attempt, default `3` |
 | `WEBHOOK_QUEUE_RETRY_DELAY` | no | base retry delay for async processing, default `2s` |
 | `DATABASE_URL` | recommended | Postgres connection string used to archive all chat messages |
+| `TRANSCRIPTION_API_BASE_URL` | for Twilio audio flow | base URL of the `go-audio-transcription` service |
+| `TRANSCRIPTION_MAX_BYTES` | no | max bytes downloaded from Twilio media URLs before transcription, default `26214400` |
 
 ## Run
 
@@ -74,9 +81,14 @@ $env:WHATSAPP_VERIFY_TOKEN="your-verify-token"
 $env:WHATSAPP_APP_SECRET="your-meta-app-secret"
 $env:WHATSAPP_ACCESS_TOKEN="your-meta-token"
 $env:WHATSAPP_PHONE_NUMBER_ID="1234567890"
+$env:TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+$env:TWILIO_AUTH_TOKEN="your-twilio-auth-token"
+$env:TWILIO_WHATSAPP_NUMBER="whatsapp:+14155238886"
+$env:TWILIO_WEBHOOK_BASE_URL="https://<your-domain>/webhook/twilio"
 $env:GEMINI_API_KEY="your-gemini-key"
 $env:REDIS_URL="redis://localhost:6379/0"
 $env:DATABASE_URL="postgres://postgres:postgres@localhost:5432/whatsapp_ai?sslmode=disable"
+$env:TRANSCRIPTION_API_BASE_URL="http://localhost:8080"
 go run .
 ```
 
@@ -87,6 +99,7 @@ Behavior by configuration:
 - webhook requests are acknowledged after enqueue, and the actual processing happens in background workers;
 - failed webhook jobs are retried asynchronously using the configured worker queue policy;
 - with `DATABASE_URL`, every user and assistant message is archived in Postgres;
+- with `TRANSCRIPTION_API_BASE_URL`, inbound Twilio audio is downloaded, transcribed, and then processed as text;
 - without `GEMINI_API_KEY`, the application falls back to a deterministic mock reply;
 - without WhatsApp sender credentials, outbound replies are logged instead of sent.
 
@@ -133,10 +146,23 @@ The page loads Swagger UI assets from `unpkg.com`, while the OpenAPI document is
 8. Publish and use `https://<your-domain>/privacy-policy` in the Meta Privacy Policy URL field.
 9. Expose the local server through HTTPS with a tunnel such as ngrok or Cloudflare Tunnel when needed.
 
+## Twilio Sandbox test
+
+1. Configure the Twilio sandbox incoming webhook to `POST https://<your-domain>/webhook/twilio`.
+2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_NUMBER`.
+3. Set `TRANSCRIPTION_API_BASE_URL` if you want inbound audio to be transcribed before the chatbot reply is generated.
+4. Set `REDIS_URL` for hot conversation state and idempotency.
+5. Set `DATABASE_URL` for durable chat history with Twilio/media/transcription metadata.
+6. Join the Twilio sandbox from the test phone and send either:
+   - a text message, which goes straight into the chatbot flow;
+   - an audio message, which is downloaded from Twilio, posted to the transcription service, and then used as the chatbot input.
+
+An architecture diagram for the two-repo setup is available in `ARCHITECTURE.md`.
+
 ## Current limitations
 
 - The async queue is in-memory only and is not durable across process restarts.
 - Postgres currently stores message history but not higher-level conversation/session entities.
-- Audio, image, and document messages are not supported.
-- The webhook still processes only text messages.
+- Twilio audio is supported only when `TRANSCRIPTION_API_BASE_URL` is configured.
+- Images and documents still receive a deterministic unsupported-media reply.
 - Metrics are in-memory only and reset on restart.

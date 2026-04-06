@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -82,6 +83,40 @@ func TestHandleWebhookNotificationEnqueuesMessages(t *testing.T) {
 	}
 }
 
+func TestHandleTwilioWebhookNotificationEnqueuesMessage(t *testing.T) {
+	cfg := config.Config{TwilioAuthToken: "twilio-secret"}
+	handler, queue := newTestHandler(cfg)
+	payload := "MessageSid=SM123&WaId=5511999999999&Body=hello&NumMedia=0"
+	request := httptest.NewRequest(http.MethodPost, "/webhook/twilio", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("X-Twilio-Signature", buildTwilioSignature("http://example.com/webhook/twilio", payload, cfg.TwilioAuthToken))
+	recorder := httptest.NewRecorder()
+
+	handler.handleTwilioWebhookNotification(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if queue.enqueueCount != 1 {
+		t.Fatalf("expected 1 enqueued message, got %d", queue.enqueueCount)
+	}
+}
+
+func TestHandleTwilioWebhookNotificationRejectsInvalidSignature(t *testing.T) {
+	cfg := config.Config{TwilioAuthToken: "twilio-secret"}
+	handler, _ := newTestHandler(cfg)
+	payload := "MessageSid=SM123&WaId=5511999999999&Body=hello&NumMedia=0"
+	request := httptest.NewRequest(http.MethodPost, "/webhook/twilio", strings.NewReader(payload))
+	request.Header.Set("X-Twilio-Signature", "invalid")
+	recorder := httptest.NewRecorder()
+
+	handler.handleTwilioWebhookNotification(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, recorder.Code)
+	}
+}
+
 func TestHandlePrivacyPolicyReturnsHTML(t *testing.T) {
 	handler, _ := newTestHandler(config.Config{})
 	request := httptest.NewRequest(http.MethodGet, "/privacy-policy", nil)
@@ -114,7 +149,7 @@ func TestHandleMetricsReturnsSnapshot(t *testing.T) {
 
 func newTestHandler(cfg config.Config) (*Handler, *stubQueue) {
 	logger := observability.NewLogger()
-	service := chatbot.NewService("", fallback.NewGenerator(), noop.NewSender(logger), memory.NewConversationRepository(12), nooparchive.NewMessageArchive(), memoryidempotency.NewStore(config.DefaultWebhookIdempotencyTTL, config.DefaultWebhookProcessingTTL))
+	service := chatbot.NewService("", fallback.NewGenerator(), noop.NewSender(logger), nil, memory.NewConversationRepository(12), nooparchive.NewMessageArchive(), memoryidempotency.NewStore(config.DefaultWebhookIdempotencyTTL, config.DefaultWebhookProcessingTTL))
 	queue := &stubQueue{}
 	return NewHandler(service, queue, cfg, logger, observability.NewMetrics()), queue
 }
@@ -123,4 +158,12 @@ func buildSignatureHeader(payload, appSecret string) string {
 	mac := hmac.New(sha256.New, []byte(appSecret))
 	_, _ = mac.Write([]byte(payload))
 	return signaturePrefix + hex.EncodeToString(mac.Sum(nil))
+}
+
+func buildTwilioSignature(requestURL, payload, authToken string) string {
+	values, err := url.ParseQuery(payload)
+	if err != nil {
+		return ""
+	}
+	return computeTwilioSignature(requestURL, values, authToken)
 }

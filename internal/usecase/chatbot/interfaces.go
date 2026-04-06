@@ -36,3 +36,7 @@ type MessageProcessor interface {
 type MessageQueue interface {
 	Enqueue(ctx context.Context, message chat.IncomingMessage) error
 }
+
+type IncomingMessagePreprocessor interface {
+	Prepare(ctx context.Context, message chat.IncomingMessage) (chat.IncomingMessage, error)
+}
