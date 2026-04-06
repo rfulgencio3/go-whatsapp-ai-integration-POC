@@ -22,6 +22,7 @@ type SourceMessageRepository interface {
 type ConversationRepository interface {
 	GetOrCreateOpen(ctx context.Context, farmID, channel, senderPhoneNumber string, lastMessageAt time.Time) (domain.Conversation, error)
 	SetPendingConfirmationEvent(ctx context.Context, conversationID, eventID string) error
+	SetPendingCorrectionEvent(ctx context.Context, conversationID, eventID string) error
 }
 
 type TranscriptionRepository interface {
@@ -35,6 +36,7 @@ type InterpretationRunRepository interface {
 type BusinessEventRepository interface {
 	Create(ctx context.Context, event *domain.BusinessEvent) error
 	FindByID(ctx context.Context, eventID string) (domain.BusinessEvent, bool, error)
+	CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error
 	UpdateStatus(ctx context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error
 }
 

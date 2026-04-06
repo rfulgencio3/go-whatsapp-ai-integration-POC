@@ -88,6 +88,7 @@ type Conversation struct {
 	Channel                    string
 	SenderPhoneNumber          string
 	PendingConfirmationEventID string
+	PendingCorrectionEventID   string
 	Status                     ConversationStatus
 	LastMessageAt              time.Time
 	CreatedAt                  time.Time

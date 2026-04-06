@@ -114,9 +114,10 @@ func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, 
 func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, channel, senderPhoneNumber string, lastMessageAt time.Time) (agro.Conversation, error) {
 	var conversation agro.Conversation
 	var pendingConfirmationEventID sql.NullString
+	var pendingCorrectionEventID sql.NullString
 	row := r.database.QueryRowContext(
 		ctx,
-		`SELECT id, farm_id, channel, sender_phone_number, pending_confirmation_event_id, status, last_message_at, created_at, updated_at
+		`SELECT id, farm_id, channel, sender_phone_number, pending_confirmation_event_id, pending_correction_event_id, status, last_message_at, created_at, updated_at
 		FROM conversations
 		WHERE farm_id = $1 AND channel = $2 AND sender_phone_number = $3 AND status = 'open'
 		ORDER BY updated_at DESC
@@ -131,6 +132,7 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 		&conversation.Channel,
 		&conversation.SenderPhoneNumber,
 		&pendingConfirmationEventID,
+		&pendingCorrectionEventID,
 		&conversation.Status,
 		&conversation.LastMessageAt,
 		&conversation.CreatedAt,
@@ -139,6 +141,9 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 	if err == nil {
 		if pendingConfirmationEventID.Valid {
 			conversation.PendingConfirmationEventID = pendingConfirmationEventID.String
+		}
+		if pendingCorrectionEventID.Valid {
+			conversation.PendingCorrectionEventID = pendingCorrectionEventID.String
 		}
 		if !lastMessageAt.IsZero() {
 			if _, updateErr := r.database.ExecContext(
@@ -182,15 +187,17 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 			channel,
 			sender_phone_number,
 			pending_confirmation_event_id,
+			pending_correction_event_id,
 			status,
 			last_message_at,
 			created_at,
 			updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		conversation.ID,
 		conversation.FarmID,
 		conversation.Channel,
 		conversation.SenderPhoneNumber,
+		nil,
 		nil,
 		string(conversation.Status),
 		conversation.LastMessageAt,
@@ -216,6 +223,23 @@ func (r *ConversationRepository) SetPendingConfirmationEvent(ctx context.Context
 	)
 	if err != nil {
 		return fmt.Errorf("update conversation pending confirmation event: %w", err)
+	}
+
+	return nil
+}
+
+func (r *ConversationRepository) SetPendingCorrectionEvent(ctx context.Context, conversationID, eventID string) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`UPDATE conversations
+		SET pending_correction_event_id = $2,
+			updated_at = NOW()
+		WHERE id = $1`,
+		conversationID,
+		nullIfEmpty(eventID),
+	)
+	if err != nil {
+		return fmt.Errorf("update conversation pending correction event: %w", err)
 	}
 
 	return nil
@@ -492,6 +516,29 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 	}
 
 	return event, true, nil
+}
+
+func (r *BusinessEventRepository) CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO event_attributes (
+			id,
+			business_event_id,
+			attr_key,
+			attr_value,
+			created_at
+		) VALUES ($1,$2,$3,$4,$5)`,
+		uuid.NewString(),
+		eventID,
+		"corrects_event_id",
+		correctedEventID,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert correction link attribute: %w", err)
+	}
+
+	return nil
 }
 
 func (r *BusinessEventRepository) UpdateStatus(ctx context.Context, eventID string, status agro.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error {

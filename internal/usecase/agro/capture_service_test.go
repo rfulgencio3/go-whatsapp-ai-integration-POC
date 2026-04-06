@@ -48,6 +48,13 @@ func (s *stubConversationRepository) SetPendingConfirmationEvent(_ context.Conte
 	return s.err
 }
 
+func (s *stubConversationRepository) SetPendingCorrectionEvent(_ context.Context, conversationID, eventID string) error {
+	if s.conversation.ID == conversationID {
+		s.conversation.PendingCorrectionEventID = eventID
+	}
+	return s.err
+}
+
 type stubSourceMessageRepository struct {
 	messages []domain.SourceMessage
 	err      error
@@ -101,8 +108,9 @@ func (s *stubInterpretationRunRepository) Create(_ context.Context, run *domain.
 }
 
 type stubBusinessEventRepository struct {
-	events []domain.BusinessEvent
-	err    error
+	events          []domain.BusinessEvent
+	correctionLinks map[string]string
+	err             error
 }
 
 func (s *stubBusinessEventRepository) Create(_ context.Context, event *domain.BusinessEvent) error {
@@ -124,6 +132,17 @@ func (s *stubBusinessEventRepository) FindByID(_ context.Context, eventID string
 		}
 	}
 	return domain.BusinessEvent{}, false, nil
+}
+
+func (s *stubBusinessEventRepository) CreateCorrectionLink(_ context.Context, eventID, correctedEventID string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.correctionLinks == nil {
+		s.correctionLinks = make(map[string]string)
+	}
+	s.correctionLinks[eventID] = correctedEventID
+	return nil
 }
 
 func (s *stubBusinessEventRepository) UpdateStatus(_ context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error {
@@ -528,6 +547,9 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	if conversations.conversation.PendingConfirmationEventID != "" {
 		t.Fatalf("expected pending confirmation event id to be cleared")
 	}
+	if conversations.conversation.PendingCorrectionEventID != "" {
+		t.Fatalf("expected pending correction event id to stay empty")
+	}
 	if !businessEvents.events[0].ConfirmedByUser {
 		t.Fatalf("expected event confirmed by user")
 	}
@@ -545,5 +567,123 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	}
 	if len(archive.recorded) != 2 {
 		t.Fatalf("expected confirmation flow archived in legacy archive")
+	}
+}
+
+func TestCaptureServiceRejectsDraftAndLinksCorrectionMessage(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:                         "conv-1",
+			FarmID:                     "farm-1",
+			PendingConfirmationEventID: "event-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	transcriptions := &stubTranscriptionRepository{}
+	interpretationRuns := &stubInterpretationRunRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		events: []domain.BusinessEvent{
+			{
+				ID:          "event-1",
+				FarmID:      "farm-1",
+				Category:    "finance",
+				Subcategory: "input_purchase",
+				Amount:      float64Ptr(850),
+				Quantity:    float64Ptr(10),
+				Unit:        "saco",
+				Status:      domain.EventStatusDraft,
+			},
+		},
+	}
+	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		stubMessageProcessor{result: chatbot.ProcessResult{
+			PhoneNumber: "5511999999999",
+			IncomingMessage: chat.IncomingMessage{
+				MessageID:   "msg-2",
+				PhoneNumber: "5511999999999",
+				Text:        "Comprei 8 sacos de racao por 700 reais",
+				Type:        chat.MessageTypeText,
+				Provider:    "whatsmeow",
+			},
+			AssistantMessage: chat.Message{
+				Role:     chat.AssistantRole,
+				Text:     "Registrei compra de insumos de R$ 700.00, 8 saco. Responda SIM para confirmar ou NAO para corrigir.",
+				Provider: "whatsmeow",
+			},
+			AssistantReplyKind: chatbot.ReplyKindConfirmation,
+		}},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		conversations,
+		sourceMessages,
+		transcriptions,
+		interpretationRuns,
+		businessEvents,
+		assistantMessages,
+	)
+
+	rejectResult, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "reject-1",
+		PhoneNumber: "5511999999999",
+		Text:        "nao",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("reject ProcessIncomingMessage() error = %v", err)
+	}
+	if rejectResult.AssistantMessage.Text == "" {
+		t.Fatalf("expected reject assistant message")
+	}
+	if conversations.conversation.PendingConfirmationEventID != "" {
+		t.Fatalf("expected pending confirmation event to be cleared after rejection")
+	}
+	if conversations.conversation.PendingCorrectionEventID != "event-1" {
+		t.Fatalf("expected pending correction event to point to rejected event, got %q", conversations.conversation.PendingCorrectionEventID)
+	}
+	if businessEvents.events[0].Status != domain.EventStatusRejected {
+		t.Fatalf("expected first event to be rejected, got %q", businessEvents.events[0].Status)
+	}
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-2",
+		PhoneNumber: "5511999999999",
+		Text:        "Comprei 8 sacos de racao por 700 reais",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("corrected ProcessIncomingMessage() error = %v", err)
+	}
+
+	if result.AssistantReplyKind != chatbot.ReplyKindConfirmation {
+		t.Fatalf("expected corrected message to keep confirmation reply kind, got %q", result.AssistantReplyKind)
+	}
+	if len(businessEvents.events) != 2 {
+		t.Fatalf("expected new corrected business event, got %d", len(businessEvents.events))
+	}
+	newEventID := businessEvents.events[1].ID
+	if got := businessEvents.correctionLinks[newEventID]; got != "event-1" {
+		t.Fatalf("expected corrected event to link to event-1, got %q", got)
+	}
+	if conversations.conversation.PendingCorrectionEventID != "" {
+		t.Fatalf("expected pending correction event to be cleared after corrected message")
+	}
+	if conversations.conversation.PendingConfirmationEventID != newEventID {
+		t.Fatalf("expected pending confirmation to point to new draft event, got %q", conversations.conversation.PendingConfirmationEventID)
 	}
 }

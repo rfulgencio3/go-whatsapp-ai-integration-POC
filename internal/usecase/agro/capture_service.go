@@ -158,6 +158,14 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, member
 			return err
 		}
 	}
+	if strings.TrimSpace(conversation.PendingCorrectionEventID) != "" {
+		if err := s.businessEvents.CreateCorrectionLink(ctx, event.ID, conversation.PendingCorrectionEventID); err != nil {
+			return err
+		}
+		if err := s.conversations.SetPendingCorrectionEvent(ctx, conversation.ID, ""); err != nil {
+			return err
+		}
+	}
 	if requiresConfirmation && result.AssistantReplyKind != chatbot.ReplyKindConfirmation {
 		if err := s.sendDraftConfirmationPrompt(ctx, phoneNumber, conversation.ID, sourceMessage.ID, event, receivedAt); err != nil {
 			return err
@@ -397,6 +405,15 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 	}
 	if err := s.conversations.SetPendingConfirmationEvent(ctx, conversation.ID, ""); err != nil {
 		return false, chatbot.ProcessResult{}, err
+	}
+	if decision == confirmationRejected {
+		if err := s.conversations.SetPendingCorrectionEvent(ctx, conversation.ID, event.ID); err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+	} else {
+		if err := s.conversations.SetPendingCorrectionEvent(ctx, conversation.ID, ""); err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
 	}
 
 	savedConversation, sourceMessage, err := s.persistConfirmationInbound(ctx, membership, message, now)
