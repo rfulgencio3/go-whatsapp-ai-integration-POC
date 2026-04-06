@@ -38,6 +38,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_farm_memberships_farm_phone
 CREATE INDEX IF NOT EXISTS idx_farm_memberships_phone_number
     ON farm_memberships(phone_number);
 
+CREATE TABLE IF NOT EXISTS phone_context_states (
+    phone_number TEXT PRIMARY KEY,
+    active_farm_id UUID REFERENCES farms(id),
+    pending_options JSONB,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY,
     farm_id UUID NOT NULL REFERENCES farms(id),

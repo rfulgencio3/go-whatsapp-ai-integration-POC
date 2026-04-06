@@ -15,6 +15,11 @@ type FarmMembershipRepository interface {
 	FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]domain.FarmMembership, error)
 }
 
+type PhoneContextStateRepository interface {
+	GetByPhoneNumber(ctx context.Context, phoneNumber string) (domain.PhoneContextState, bool, error)
+	Upsert(ctx context.Context, state *domain.PhoneContextState) error
+}
+
 type SourceMessageRepository interface {
 	Create(ctx context.Context, message *domain.SourceMessage) error
 }

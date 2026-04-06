@@ -22,6 +22,7 @@ type CaptureService struct {
 	messageArchive     chatbot.MessageArchive
 	interpreter        Interpreter
 	farmMemberships    FarmMembershipRepository
+	phoneContexts      PhoneContextStateRepository
 	conversations      ConversationRepository
 	sourceMessages     SourceMessageRepository
 	transcriptions     TranscriptionRepository
@@ -29,6 +30,16 @@ type CaptureService struct {
 	businessEvents     BusinessEventRepository
 	assistantMessages  AssistantMessageRepository
 }
+
+type membershipResolution string
+
+const (
+	membershipResolutionUnavailable membershipResolution = "unavailable"
+	membershipResolutionNotFound    membershipResolution = "not_found"
+	membershipResolutionAmbiguous   membershipResolution = "ambiguous"
+	membershipResolutionResolved    membershipResolution = "resolved"
+	membershipResolutionSelected    membershipResolution = "selected"
+)
 
 func NewCaptureService(
 	logger *observability.Logger,
@@ -38,6 +49,7 @@ func NewCaptureService(
 	messageArchive chatbot.MessageArchive,
 	interpreter Interpreter,
 	farmMemberships FarmMembershipRepository,
+	phoneContexts PhoneContextStateRepository,
 	conversations ConversationRepository,
 	sourceMessages SourceMessageRepository,
 	transcriptions TranscriptionRepository,
@@ -57,6 +69,7 @@ func NewCaptureService(
 		messageArchive:     messageArchive,
 		interpreter:        interpreter,
 		farmMemberships:    farmMemberships,
+		phoneContexts:      phoneContexts,
 		conversations:      conversations,
 		sourceMessages:     sourceMessages,
 		transcriptions:     transcriptions,
@@ -71,12 +84,22 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		return chatbot.ProcessResult{}, nil
 	}
 
-	membership, resolved, err := s.resolveMembership(ctx, message.PhoneNumber)
+	membership, resolution, err := s.resolveMembership(ctx, message.PhoneNumber)
 	if err != nil {
 		return chatbot.ProcessResult{}, err
 	}
+	resolved := resolution == membershipResolutionResolved
 	if resolved {
 		handled, result, err := s.handleConfirmationMessage(ctx, membership, message)
+		if err != nil {
+			return chatbot.ProcessResult{}, err
+		}
+		if handled {
+			return result, nil
+		}
+	}
+	if !resolved {
+		handled, result, err := s.handleUnresolvedMembership(ctx, resolution, message)
 		if err != nil {
 			return chatbot.ProcessResult{}, err
 		}
@@ -336,32 +359,144 @@ func (s *CaptureService) persistInterpretation(ctx context.Context, farmID strin
 	return event, interpretation.RequiresConfirmation, nil
 }
 
-func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber string) (domain.FarmMembership, bool, error) {
+func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber string) (domain.FarmMembership, membershipResolution, error) {
 	if s.farmMemberships == nil {
-		return domain.FarmMembership{}, false, nil
+		return domain.FarmMembership{}, membershipResolutionUnavailable, nil
 	}
 
 	normalized := domain.NormalizePhoneNumber(phoneNumber)
 	if normalized == "" {
-		return domain.FarmMembership{}, false, nil
+		return domain.FarmMembership{}, membershipResolutionUnavailable, nil
 	}
 
 	memberships, err := s.farmMemberships.FindActiveByPhoneNumber(ctx, normalized)
 	if err != nil {
-		return domain.FarmMembership{}, false, err
+		return domain.FarmMembership{}, membershipResolutionUnavailable, err
+	}
+	if len(memberships) > 1 && s.phoneContexts != nil {
+		state, found, err := s.phoneContexts.GetByPhoneNumber(ctx, normalized)
+		if err != nil {
+			return domain.FarmMembership{}, membershipResolutionUnavailable, err
+		}
+		if found && strings.TrimSpace(state.ActiveFarmID) != "" {
+			for _, membership := range memberships {
+				if membership.FarmID == state.ActiveFarmID {
+					return membership, membershipResolutionResolved, nil
+				}
+			}
+		}
 	}
 	switch len(memberships) {
 	case 0:
-		return domain.FarmMembership{}, false, nil
+		return domain.FarmMembership{}, membershipResolutionNotFound, nil
 	case 1:
-		return memberships[0], true, nil
+		return memberships[0], membershipResolutionResolved, nil
 	default:
 		s.logger.Info("agro context is ambiguous for inbound phone", map[string]any{
 			"phone_number":      normalized,
 			"matching_contexts": len(memberships),
 		})
-		return domain.FarmMembership{}, false, nil
+		return domain.FarmMembership{}, membershipResolutionAmbiguous, nil
 	}
+}
+
+func (s *CaptureService) handleUnresolvedMembership(ctx context.Context, resolution membershipResolution, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
+	if s.messageSender == nil {
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	replyText := ""
+	switch resolution {
+	case membershipResolutionNotFound:
+		replyText = buildUnregisteredNumberReply()
+	case membershipResolutionAmbiguous:
+		handled, responseText, err := s.handleAmbiguousMembershipSelection(ctx, normalizedPhone, message.Text)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if !handled {
+			return false, chatbot.ProcessResult{}, nil
+		}
+		replyText = responseText
+	default:
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	now := time.Now().UTC()
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	assistantMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      replyText,
+		CreatedAt: now,
+		Type:      chat.MessageTypeText,
+		Provider:  providerOrDefault(message.Provider),
+	}
+	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	return true, chatbot.ProcessResult{
+		PhoneNumber:      normalizedPhone,
+		IncomingMessage:  message,
+		UserMessage:      userMessage,
+		AssistantMessage: assistantMessage,
+	}, nil
+}
+
+func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context, phoneNumber, text string) (bool, string, error) {
+	if s.farmMemberships == nil || s.phoneContexts == nil {
+		return true, buildAmbiguousContextReply(), nil
+	}
+
+	state, found, err := s.phoneContexts.GetByPhoneNumber(ctx, phoneNumber)
+	if err != nil {
+		return false, "", err
+	}
+	if found && len(state.PendingOptions) > 0 {
+		selection := parseContextSelection(text)
+		if selection >= 1 && selection <= len(state.PendingOptions) {
+			option := state.PendingOptions[selection-1]
+			state.ActiveFarmID = option.FarmID
+			state.PendingOptions = nil
+			state.UpdatedAt = time.Now().UTC()
+			if err := s.phoneContexts.Upsert(ctx, &state); err != nil {
+				return false, "", err
+			}
+
+			return true, buildSelectedContextReply(option.FarmName), nil
+		}
+	}
+
+	memberships, err := s.farmMemberships.FindActiveByPhoneNumber(ctx, phoneNumber)
+	if err != nil {
+		return false, "", err
+	}
+	if len(memberships) == 0 {
+		return true, buildUnregisteredNumberReply(), nil
+	}
+
+	options := make([]domain.PhoneContextOption, 0, len(memberships))
+	for _, membership := range memberships {
+		options = append(options, domain.PhoneContextOption{
+			FarmID:   membership.FarmID,
+			FarmName: membership.FarmName,
+		})
+	}
+	state = domain.PhoneContextState{
+		PhoneNumber:    phoneNumber,
+		PendingOptions: options,
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := s.phoneContexts.Upsert(ctx, &state); err != nil {
+		return false, "", err
+	}
+
+	return true, buildAmbiguousContextSelectionReply(options), nil
 }
 
 func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
@@ -534,6 +669,51 @@ func buildConfirmedReply(event domain.BusinessEvent) string {
 
 func buildRejectedReply() string {
 	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
+}
+
+func buildUnregisteredNumberReply() string {
+	return "Seu numero ainda nao esta vinculado a uma fazenda. Peça o cadastro do seu telefone para continuar."
+}
+
+func buildAmbiguousContextReply() string {
+	return "Seu numero esta vinculado a mais de uma fazenda. Ajuste o cadastro antes de continuar."
+}
+
+func buildAmbiguousContextSelectionReply(options []domain.PhoneContextOption) string {
+	var builder strings.Builder
+	builder.WriteString("Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n")
+	for index, option := range options {
+		builder.WriteString(fmt.Sprintf("%d. %s", index+1, fallbackFarmName(option, index+1)))
+		if index < len(options)-1 {
+			builder.WriteString("\n")
+		}
+	}
+
+	return builder.String()
+}
+
+func buildSelectedContextReply(farmName string) string {
+	return fmt.Sprintf("Contexto definido para %s. Envie a informacao novamente.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
+}
+
+func parseContextSelection(text string) int {
+	normalized := strings.TrimSpace(text)
+	if normalized == "" {
+		return 0
+	}
+	if len(normalized) != 1 || normalized[0] < '1' || normalized[0] > '9' {
+		return 0
+	}
+
+	return int(normalized[0] - '0')
+}
+
+func fallbackFarmName(option domain.PhoneContextOption, position int) string {
+	if strings.TrimSpace(option.FarmName) != "" {
+		return strings.TrimSpace(option.FarmName)
+	}
+
+	return fmt.Sprintf("Fazenda %d", position)
 }
 
 func buildDraftConfirmationPrompt(event domain.BusinessEvent) string {

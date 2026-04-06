@@ -130,6 +130,7 @@ func New(cfg config.Config) (*Application, error) {
 			messageArchive,
 			interpreter,
 			storagepostgres.NewFarmMembershipRepository(database),
+			storagepostgres.NewPhoneContextStateRepository(database),
 			storagepostgres.NewConversationRepository(database),
 			storagepostgres.NewSourceMessageRepository(database),
 			storagepostgres.NewTranscriptionRepository(database),

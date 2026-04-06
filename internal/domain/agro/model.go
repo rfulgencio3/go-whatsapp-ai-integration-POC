@@ -64,6 +64,7 @@ type Farm struct {
 type FarmMembership struct {
 	ID          string
 	FarmID      string
+	FarmName    string
 	PersonName  string
 	PhoneNumber string
 	Role        FarmRole
@@ -93,6 +94,18 @@ type Conversation struct {
 	LastMessageAt              time.Time
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+}
+
+type PhoneContextOption struct {
+	FarmID   string
+	FarmName string
+}
+
+type PhoneContextState struct {
+	PhoneNumber    string
+	ActiveFarmID   string
+	PendingOptions []PhoneContextOption
+	UpdatedAt      time.Time
 }
 
 type SourceMessage struct {

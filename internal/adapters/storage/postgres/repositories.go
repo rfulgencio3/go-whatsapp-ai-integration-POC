@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -15,6 +16,10 @@ type FarmMembershipRepository struct {
 }
 
 type ConversationRepository struct {
+	database *sql.DB
+}
+
+type PhoneContextStateRepository struct {
 	database *sql.DB
 }
 
@@ -46,6 +51,10 @@ func NewConversationRepository(database *sql.DB) *ConversationRepository {
 	return &ConversationRepository{database: database}
 }
 
+func NewPhoneContextStateRepository(database *sql.DB) *PhoneContextStateRepository {
+	return &PhoneContextStateRepository{database: database}
+}
+
 func NewSourceMessageRepository(database *sql.DB) *SourceMessageRepository {
 	return &SourceMessageRepository{database: database}
 }
@@ -69,10 +78,11 @@ func NewAssistantMessageRepository(database *sql.DB) *AssistantMessageRepository
 func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]agro.FarmMembership, error) {
 	rows, err := r.database.QueryContext(
 		ctx,
-		`SELECT id, farm_id, person_name, phone_number, role, is_primary, status, verified_at, created_at, updated_at
-		FROM farm_memberships
-		WHERE phone_number = $1 AND status = 'active'
-		ORDER BY is_primary DESC, created_at ASC`,
+		`SELECT fm.id, fm.farm_id, f.name, fm.person_name, fm.phone_number, fm.role, fm.is_primary, fm.status, fm.verified_at, fm.created_at, fm.updated_at
+		FROM farm_memberships fm
+		INNER JOIN farms f ON f.id = fm.farm_id
+		WHERE fm.phone_number = $1 AND fm.status = 'active'
+		ORDER BY fm.is_primary DESC, fm.created_at ASC`,
 		agro.NormalizePhoneNumber(phoneNumber),
 	)
 	if err != nil {
@@ -87,6 +97,7 @@ func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, 
 		if err := rows.Scan(
 			&membership.ID,
 			&membership.FarmID,
+			&membership.FarmName,
 			&membership.PersonName,
 			&membership.PhoneNumber,
 			&membership.Role,
@@ -109,6 +120,78 @@ func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, 
 	}
 
 	return memberships, nil
+}
+
+func (r *PhoneContextStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.PhoneContextState, bool, error) {
+	var state agro.PhoneContextState
+	var activeFarmID sql.NullString
+	var pendingOptionsRaw []byte
+
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT phone_number, active_farm_id, pending_options, updated_at
+		FROM phone_context_states
+		WHERE phone_number = $1`,
+		agro.NormalizePhoneNumber(phoneNumber),
+	).Scan(
+		&state.PhoneNumber,
+		&activeFarmID,
+		&pendingOptionsRaw,
+		&state.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.PhoneContextState{}, false, nil
+	}
+	if err != nil {
+		return agro.PhoneContextState{}, false, fmt.Errorf("query phone context state: %w", err)
+	}
+	if activeFarmID.Valid {
+		state.ActiveFarmID = activeFarmID.String
+	}
+	if len(pendingOptionsRaw) > 0 {
+		if err := json.Unmarshal(pendingOptionsRaw, &state.PendingOptions); err != nil {
+			return agro.PhoneContextState{}, false, fmt.Errorf("decode phone context pending options: %w", err)
+		}
+	}
+
+	return state, true, nil
+}
+
+func (r *PhoneContextStateRepository) Upsert(ctx context.Context, state *agro.PhoneContextState) error {
+	if state == nil {
+		return fmt.Errorf("upsert phone context state: nil state")
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+
+	pendingOptionsRaw, err := json.Marshal(state.PendingOptions)
+	if err != nil {
+		return fmt.Errorf("encode phone context pending options: %w", err)
+	}
+
+	_, err = r.database.ExecContext(
+		ctx,
+		`INSERT INTO phone_context_states (
+			phone_number,
+			active_farm_id,
+			pending_options,
+			updated_at
+		) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (phone_number) DO UPDATE
+		SET active_farm_id = EXCLUDED.active_farm_id,
+			pending_options = EXCLUDED.pending_options,
+			updated_at = EXCLUDED.updated_at`,
+		agro.NormalizePhoneNumber(state.PhoneNumber),
+		nullIfEmpty(state.ActiveFarmID),
+		pendingOptionsRaw,
+		state.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert phone context state: %w", err)
+	}
+
+	return nil
 }
 
 func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, channel, senderPhoneNumber string, lastMessageAt time.Time) (agro.Conversation, error) {
