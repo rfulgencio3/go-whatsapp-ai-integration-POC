@@ -87,12 +87,17 @@ func New(cfg config.Config) (*Application, error) {
 		replyGenerator = fallback.NewGenerator()
 	}
 
+	var transcriptionClient *transcriptionhttpapi.Client
+	if cfg.HasTranscriptionConfig() {
+		transcriptionClient = transcriptionhttpapi.NewClient(httpClient, cfg.TranscriptionAPIBaseURL)
+	}
+
 	var messageSender chatbot.MessageSender
 	var startFunc func(context.Context) error
 	var stopFunc func()
 	var whatsmeowClient *whatsmeowchannel.Client
 	if cfg.HasWhatsmeowConfig() {
-		client, err := whatsmeowchannel.New(cfg, logger, nil)
+		client, err := whatsmeowchannel.New(cfg, logger, nil, transcriptionClient)
 		if err != nil {
 			return nil, fmt.Errorf("initialize whatsmeow adapter: %w", err)
 		}
@@ -110,10 +115,6 @@ func New(cfg config.Config) (*Application, error) {
 
 	incomingPreprocessor := chatbot.IncomingMessagePreprocessor(noopinbound.NewPreprocessor())
 	if cfg.HasTwilioWebhookConfig() {
-		var transcriptionClient *transcriptionhttpapi.Client
-		if cfg.HasTranscriptionConfig() {
-			transcriptionClient = transcriptionhttpapi.NewClient(httpClient, cfg.TranscriptionAPIBaseURL)
-		}
 		incomingPreprocessor = twilioinbound.NewPreprocessor(httpClient, cfg.TwilioAccountSID, cfg.TwilioAuthToken, cfg.TranscriptionMaxBytes, transcriptionClient)
 	}
 

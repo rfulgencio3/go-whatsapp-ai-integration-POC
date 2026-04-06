@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	transcriptionhttpapi "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/transcription/httpapi"
 	wm "go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -27,12 +28,22 @@ type Client struct {
 	processor      chatbot.MessageProcessor
 	mutex          sync.RWMutex
 	client         *wm.Client
+	downloader     mediaDownloader
+	transcriber    AudioTranscriber
 	started        bool
 	pairCodeSent   bool
 	eventHandlerID uint32
 }
 
-func New(cfg config.Config, logger *observability.Logger, processor chatbot.MessageProcessor) (*Client, error) {
+type AudioTranscriber interface {
+	Transcribe(ctx context.Context, fileName, contentType string, data []byte) (transcriptionhttpapi.Result, error)
+}
+
+type mediaDownloader interface {
+	Download(ctx context.Context, msg wm.DownloadableMessage) ([]byte, error)
+}
+
+func New(cfg config.Config, logger *observability.Logger, processor chatbot.MessageProcessor, transcriber AudioTranscriber) (*Client, error) {
 	if logger == nil {
 		logger = observability.NewLogger()
 	}
@@ -58,10 +69,12 @@ func New(cfg config.Config, logger *observability.Logger, processor chatbot.Mess
 	waClient := wm.NewClient(deviceStore, clientLog)
 
 	instance := &Client{
-		config:    cfg,
-		logger:    logger,
-		processor: processor,
-		client:    waClient,
+		config:      cfg,
+		logger:      logger,
+		processor:   processor,
+		client:      waClient,
+		downloader:  waClient,
+		transcriber: transcriber,
 	}
 	instance.eventHandlerID = waClient.AddEventHandler(instance.handleEvent)
 
@@ -207,14 +220,7 @@ func (c *Client) handleIncomingMessage(event *events.Message) {
 		return
 	}
 
-	text, messageType := extractInboundContent(event.Message)
-	incoming := chat.IncomingMessage{
-		MessageID:   event.Info.ID,
-		PhoneNumber: event.Info.Sender.User,
-		Text:        text,
-		Type:        messageType,
-		Provider:    "whatsmeow",
-	}
+	incoming := buildIncomingMessage(event)
 
 	c.mutex.RLock()
 	processor := c.processor
@@ -232,6 +238,8 @@ func (c *Client) handleIncomingMessage(event *events.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	incoming = c.enrichIncomingMessage(ctx, incoming, event.Message)
+
 	if _, err := processor.ProcessIncomingMessage(ctx, incoming); err != nil {
 		c.logger.Error("whatsmeow inbound processing failed", map[string]any{
 			"phone_number": incoming.PhoneNumber,
@@ -242,19 +250,130 @@ func (c *Client) handleIncomingMessage(event *events.Message) {
 	}
 }
 
-func extractInboundContent(message *waProto.Message) (string, chat.MessageType) {
+func buildIncomingMessage(event *events.Message) chat.IncomingMessage {
+	if event == nil || event.Message == nil {
+		return chat.IncomingMessage{Provider: "whatsmeow"}
+	}
+
+	text, messageType, attachments, duration := extractInboundContent(event.Message)
+	return chat.IncomingMessage{
+		MessageID:            event.Info.ID,
+		PhoneNumber:          event.Info.Sender.User,
+		Text:                 text,
+		Type:                 messageType,
+		Provider:             "whatsmeow",
+		MediaAttachments:     attachments,
+		AudioDurationSeconds: duration,
+	}
+}
+
+func (c *Client) enrichIncomingMessage(ctx context.Context, incoming chat.IncomingMessage, message *waProto.Message) chat.IncomingMessage {
+	if message == nil || incoming.Type != chat.MessageTypeAudio || c.transcriber == nil || c.downloader == nil {
+		return incoming
+	}
+
+	audio := message.GetAudioMessage()
+	if audio == nil {
+		return incoming
+	}
+	if c.config.TranscriptionMaxBytes > 0 && int64(audio.GetFileLength()) > c.config.TranscriptionMaxBytes {
+		c.logger.Error("whatsmeow inbound audio exceeds transcription max bytes", map[string]any{
+			"message_id": eventMessageID(incoming),
+			"size_bytes": audio.GetFileLength(),
+		})
+		return incoming
+	}
+
+	payload, err := c.downloader.Download(ctx, audio)
+	if err != nil {
+		c.logger.Error("whatsmeow audio download failed", map[string]any{
+			"message_id": eventMessageID(incoming),
+			"error":      err.Error(),
+		})
+		return incoming
+	}
+	if c.config.TranscriptionMaxBytes > 0 && int64(len(payload)) > c.config.TranscriptionMaxBytes {
+		c.logger.Error("whatsmeow inbound audio payload exceeds transcription max bytes", map[string]any{
+			"message_id": eventMessageID(incoming),
+			"size_bytes": len(payload),
+		})
+		return incoming
+	}
+
+	attachment := firstAttachment(incoming.MediaAttachments)
+	result, err := c.transcriber.Transcribe(ctx, fallbackAudioFileName(attachment), attachment.ContentType, payload)
+	if err != nil {
+		c.logger.Error("whatsmeow audio transcription failed", map[string]any{
+			"message_id": eventMessageID(incoming),
+			"error":      err.Error(),
+		})
+		return incoming
+	}
+
+	incoming.Text = strings.TrimSpace(result.Transcript)
+	incoming.TranscriptionID = strings.TrimSpace(result.ID)
+	incoming.TranscriptionLanguage = strings.TrimSpace(result.Language)
+	if result.AudioDuration > 0 {
+		incoming.AudioDurationSeconds = result.AudioDuration
+	}
+
+	return incoming
+}
+
+func extractInboundContent(message *waProto.Message) (string, chat.MessageType, []chat.MediaAttachment, float64) {
 	switch {
 	case strings.TrimSpace(message.GetConversation()) != "":
-		return strings.TrimSpace(message.GetConversation()), chat.MessageTypeText
+		return strings.TrimSpace(message.GetConversation()), chat.MessageTypeText, nil, 0
 	case message.GetExtendedTextMessage() != nil && strings.TrimSpace(message.GetExtendedTextMessage().GetText()) != "":
-		return strings.TrimSpace(message.GetExtendedTextMessage().GetText()), chat.MessageTypeText
+		return strings.TrimSpace(message.GetExtendedTextMessage().GetText()), chat.MessageTypeText, nil, 0
 	case message.GetImageMessage() != nil:
-		return strings.TrimSpace(message.GetImageMessage().GetCaption()), chat.MessageTypeImage
+		image := message.GetImageMessage()
+		return strings.TrimSpace(image.GetCaption()), chat.MessageTypeImage, []chat.MediaAttachment{{
+			ContentType: strings.TrimSpace(image.GetMimetype()),
+		}}, 0
 	case message.GetDocumentMessage() != nil:
-		return strings.TrimSpace(message.GetDocumentMessage().GetCaption()), chat.MessageTypeDocument
+		document := message.GetDocumentMessage()
+		return strings.TrimSpace(document.GetCaption()), chat.MessageTypeDocument, []chat.MediaAttachment{{
+			ContentType: strings.TrimSpace(document.GetMimetype()),
+			Filename:    strings.TrimSpace(document.GetFileName()),
+		}}, 0
 	case message.GetAudioMessage() != nil:
-		return "", chat.MessageTypeAudio
+		audio := message.GetAudioMessage()
+		return "", chat.MessageTypeAudio, []chat.MediaAttachment{{
+			ContentType: strings.TrimSpace(audio.GetMimetype()),
+			Filename:    fallbackAudioFileName(chat.MediaAttachment{ContentType: strings.TrimSpace(audio.GetMimetype())}),
+		}}, float64(audio.GetSeconds())
 	default:
-		return "", chat.MessageTypeUnsupported
+		return "", chat.MessageTypeUnsupported, nil, 0
 	}
+}
+
+func firstAttachment(attachments []chat.MediaAttachment) chat.MediaAttachment {
+	if len(attachments) == 0 {
+		return chat.MediaAttachment{}
+	}
+
+	return attachments[0]
+}
+
+func fallbackAudioFileName(attachment chat.MediaAttachment) string {
+	if strings.TrimSpace(attachment.Filename) != "" {
+		return strings.TrimSpace(attachment.Filename)
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
+	switch {
+	case strings.Contains(contentType, "ogg"):
+		return "audio.ogg"
+	case strings.Contains(contentType, "mpeg"), strings.Contains(contentType, "mp3"):
+		return "audio.mp3"
+	case strings.Contains(contentType, "wav"):
+		return "audio.wav"
+	default:
+		return "audio.bin"
+	}
+}
+
+func eventMessageID(message chat.IncomingMessage) string {
+	return strings.TrimSpace(message.MessageID)
 }
