@@ -130,13 +130,16 @@ func New(cfg config.Config) (*Application, error) {
 			messageArchive,
 			interpreter,
 			storagepostgres.NewFarmMembershipRepository(database),
+			storagepostgres.NewFarmRegistrationRepository(database),
 			storagepostgres.NewPhoneContextStateRepository(database),
+			storagepostgres.NewOnboardingStateRepository(database),
 			storagepostgres.NewConversationRepository(database),
 			storagepostgres.NewSourceMessageRepository(database),
 			storagepostgres.NewTranscriptionRepository(database),
 			storagepostgres.NewInterpretationRunRepository(database),
 			storagepostgres.NewBusinessEventRepository(database),
 			storagepostgres.NewAssistantMessageRepository(database),
+			storagepostgres.NewOnboardingMessageRepository(database),
 		)
 	}
 	if whatsmeowClient != nil {

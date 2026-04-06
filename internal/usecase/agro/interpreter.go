@@ -173,6 +173,18 @@ func normalizeText(value string) string {
 		"õ", "o",
 		"ú", "u",
 		"ç", "c",
+		"Ã¡", "a",
+		"Ã ", "a",
+		"Ã£", "a",
+		"Ã¢", "a",
+		"Ã©", "e",
+		"Ãª", "e",
+		"Ã­", "i",
+		"Ã³", "o",
+		"Ã´", "o",
+		"Ãµ", "o",
+		"Ãº", "u",
+		"Ã§", "c",
 	)
 
 	return replacer.Replace(strings.ToLower(strings.TrimSpace(value)))

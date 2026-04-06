@@ -15,9 +15,23 @@ type FarmMembershipRepository interface {
 	FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]domain.FarmMembership, error)
 }
 
+type FarmRegistrationRepository interface {
+	CreateInitialRegistration(ctx context.Context, phoneNumber, producerName, farmName string) (domain.FarmMembership, error)
+}
+
 type PhoneContextStateRepository interface {
 	GetByPhoneNumber(ctx context.Context, phoneNumber string) (domain.PhoneContextState, bool, error)
 	Upsert(ctx context.Context, state *domain.PhoneContextState) error
+}
+
+type OnboardingStateRepository interface {
+	GetByPhoneNumber(ctx context.Context, phoneNumber string) (domain.OnboardingState, bool, error)
+	Upsert(ctx context.Context, state *domain.OnboardingState) error
+	DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error
+}
+
+type OnboardingMessageRepository interface {
+	Create(ctx context.Context, message *domain.OnboardingMessage) error
 }
 
 type SourceMessageRepository interface {

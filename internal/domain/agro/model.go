@@ -11,6 +11,7 @@ type ConversationStatus string
 type EventStatus string
 type MessageType string
 type ReplyType string
+type OnboardingMessageDirection string
 
 const (
 	RoleOwner        FarmRole = "owner"
@@ -40,6 +41,9 @@ const (
 
 	ReplyTypeText         ReplyType = "text"
 	ReplyTypeConfirmation ReplyType = "confirmation"
+
+	OnboardingMessageDirectionInbound  OnboardingMessageDirection = "inbound"
+	OnboardingMessageDirectionOutbound OnboardingMessageDirection = "outbound"
 )
 
 type Producer struct {
@@ -106,6 +110,32 @@ type PhoneContextState struct {
 	ActiveFarmID   string
 	PendingOptions []PhoneContextOption
 	UpdatedAt      time.Time
+}
+
+type OnboardingStep string
+
+const (
+	OnboardingStepAwaitingProducerName OnboardingStep = "awaiting_producer_name"
+	OnboardingStepAwaitingFarmName     OnboardingStep = "awaiting_farm_name"
+)
+
+type OnboardingState struct {
+	PhoneNumber  string
+	Step         OnboardingStep
+	ProducerName string
+	UpdatedAt    time.Time
+}
+
+type OnboardingMessage struct {
+	ID                string
+	PhoneNumber       string
+	Step              OnboardingStep
+	Direction         OnboardingMessageDirection
+	Provider          string
+	ProviderMessageID string
+	MessageType       MessageType
+	Body              string
+	CreatedAt         time.Time
 }
 
 type SourceMessage struct {

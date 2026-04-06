@@ -22,7 +22,10 @@ type CaptureService struct {
 	messageArchive     chatbot.MessageArchive
 	interpreter        Interpreter
 	farmMemberships    FarmMembershipRepository
+	farmRegistrations  FarmRegistrationRepository
 	phoneContexts      PhoneContextStateRepository
+	onboardingStates   OnboardingStateRepository
+	onboardingMessages OnboardingMessageRepository
 	conversations      ConversationRepository
 	sourceMessages     SourceMessageRepository
 	transcriptions     TranscriptionRepository
@@ -49,16 +52,24 @@ func NewCaptureService(
 	messageArchive chatbot.MessageArchive,
 	interpreter Interpreter,
 	farmMemberships FarmMembershipRepository,
+	farmRegistrations FarmRegistrationRepository,
 	phoneContexts PhoneContextStateRepository,
+	onboardingStates OnboardingStateRepository,
 	conversations ConversationRepository,
 	sourceMessages SourceMessageRepository,
 	transcriptions TranscriptionRepository,
 	interpretationRuns InterpretationRunRepository,
 	businessEvents BusinessEventRepository,
 	assistantMessages AssistantMessageRepository,
+	onboardingMessages ...OnboardingMessageRepository,
 ) *CaptureService {
 	if logger == nil {
 		logger = observability.NewLogger()
+	}
+
+	var onboardingMessageRepository OnboardingMessageRepository
+	if len(onboardingMessages) > 0 {
+		onboardingMessageRepository = onboardingMessages[0]
 	}
 
 	return &CaptureService{
@@ -69,7 +80,10 @@ func NewCaptureService(
 		messageArchive:     messageArchive,
 		interpreter:        interpreter,
 		farmMemberships:    farmMemberships,
+		farmRegistrations:  farmRegistrations,
 		phoneContexts:      phoneContexts,
+		onboardingStates:   onboardingStates,
+		onboardingMessages: onboardingMessageRepository,
 		conversations:      conversations,
 		sourceMessages:     sourceMessages,
 		transcriptions:     transcriptions,
@@ -82,6 +96,20 @@ func NewCaptureService(
 func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (chatbot.ProcessResult, error) {
 	if s.downstream == nil {
 		return chatbot.ProcessResult{}, nil
+	}
+	handled, result, err := s.handleOnboarding(ctx, message)
+	if err != nil {
+		return chatbot.ProcessResult{}, err
+	}
+	if handled {
+		return result, nil
+	}
+	handled, result, err = s.handleContextSwitchRequest(ctx, message)
+	if err != nil {
+		return chatbot.ProcessResult{}, err
+	}
+	if handled {
+		return result, nil
 	}
 
 	membership, resolution, err := s.resolveMembership(ctx, message.PhoneNumber)
@@ -108,7 +136,7 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		}
 	}
 
-	result, err := s.downstream.ProcessIncomingMessage(ctx, message)
+	result, err = s.downstream.ProcessIncomingMessage(ctx, message)
 	if err != nil || result.Duplicate {
 		return result, err
 	}
@@ -123,6 +151,185 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	}
 
 	return result, nil
+}
+
+func (s *CaptureService) handleOnboarding(ctx context.Context, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
+	if s.messageSender == nil || s.onboardingStates == nil {
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	state, found, err := s.onboardingStates.GetByPhoneNumber(ctx, normalizedPhone)
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	replyText := ""
+	traceStep := domain.OnboardingStep("")
+	switch {
+	case isOnboardingStartCommand(message.Text):
+		replyText, traceStep, err = s.startOnboarding(ctx, normalizedPhone)
+	case found && state.Step == domain.OnboardingStepAwaitingProducerName:
+		replyText, traceStep, err = s.completeOnboardingProducerStep(ctx, state, message.Text)
+	case found && state.Step == domain.OnboardingStepAwaitingFarmName:
+		replyText, traceStep, err = s.completeOnboardingFarmStep(ctx, state, message.Text)
+	default:
+		return false, chatbot.ProcessResult{}, nil
+	}
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	now := time.Now().UTC()
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	assistantMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      replyText,
+		CreatedAt: now,
+		Type:      chat.MessageTypeText,
+		Provider:  providerOrDefault(message.Provider),
+	}
+	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+	if err := s.persistOnboardingInteraction(ctx, normalizedPhone, traceStep, message, assistantMessage, now); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	return true, chatbot.ProcessResult{
+		PhoneNumber:      normalizedPhone,
+		IncomingMessage:  message,
+		UserMessage:      userMessage,
+		AssistantMessage: assistantMessage,
+	}, nil
+}
+
+func (s *CaptureService) startOnboarding(ctx context.Context, phoneNumber string) (string, domain.OnboardingStep, error) {
+	if s.farmMemberships != nil {
+		memberships, err := s.farmMemberships.FindActiveByPhoneNumber(ctx, phoneNumber)
+		if err != nil {
+			return "", "", err
+		}
+		if len(memberships) > 0 {
+			return buildAlreadyRegisteredReply(), "", nil
+		}
+	}
+
+	state := domain.OnboardingState{
+		PhoneNumber: phoneNumber,
+		Step:        domain.OnboardingStepAwaitingProducerName,
+		UpdatedAt:   time.Now().UTC(),
+	}
+	if err := s.onboardingStates.Upsert(ctx, &state); err != nil {
+		return "", "", err
+	}
+
+	return "Vamos fazer seu cadastro inicial. Qual o nome do produtor ou responsavel?", domain.OnboardingStepAwaitingProducerName, nil
+}
+
+func (s *CaptureService) completeOnboardingProducerStep(ctx context.Context, state domain.OnboardingState, text string) (string, domain.OnboardingStep, error) {
+	producerName := strings.TrimSpace(text)
+	if producerName == "" {
+		return "Envie o nome do produtor ou responsavel para continuar o cadastro.", domain.OnboardingStepAwaitingProducerName, nil
+	}
+
+	state.Step = domain.OnboardingStepAwaitingFarmName
+	state.ProducerName = producerName
+	state.UpdatedAt = time.Now().UTC()
+	if err := s.onboardingStates.Upsert(ctx, &state); err != nil {
+		return "", "", err
+	}
+
+	return "Agora envie o nome da fazenda ou negocio.", domain.OnboardingStepAwaitingFarmName, nil
+}
+
+func (s *CaptureService) completeOnboardingFarmStep(ctx context.Context, state domain.OnboardingState, text string) (string, domain.OnboardingStep, error) {
+	farmName := strings.TrimSpace(text)
+	if farmName == "" {
+		return "Envie o nome da fazenda ou negocio para concluir o cadastro.", domain.OnboardingStepAwaitingFarmName, nil
+	}
+	if s.farmRegistrations == nil {
+		return "", "", nil
+	}
+
+	membership, err := s.farmRegistrations.CreateInitialRegistration(ctx, state.PhoneNumber, state.ProducerName, farmName)
+	if err != nil {
+		return "", "", err
+	}
+	if s.onboardingStates != nil {
+		if err := s.onboardingStates.DeleteByPhoneNumber(ctx, state.PhoneNumber); err != nil {
+			return "", "", err
+		}
+	}
+
+	return fmt.Sprintf("Cadastro concluido. Seu numero foi vinculado a %s. Agora voce ja pode enviar registros.", fallbackFarmName(domain.PhoneContextOption{FarmName: membership.FarmName}, 1)), "", nil
+}
+
+func (s *CaptureService) handleContextSwitchRequest(ctx context.Context, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
+	if s.messageSender == nil || s.farmMemberships == nil || s.phoneContexts == nil {
+		return false, chatbot.ProcessResult{}, nil
+	}
+	if !isContextSwitchCommand(message.Text) {
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	memberships, err := s.farmMemberships.FindActiveByPhoneNumber(ctx, normalizedPhone)
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	replyText := ""
+	switch len(memberships) {
+	case 0:
+		replyText = buildUnregisteredNumberReply()
+	case 1:
+		replyText = buildSingleContextReply(memberships[0].FarmName)
+	default:
+		options := make([]domain.PhoneContextOption, 0, len(memberships))
+		for _, membership := range memberships {
+			options = append(options, domain.PhoneContextOption{
+				FarmID:   membership.FarmID,
+				FarmName: membership.FarmName,
+			})
+		}
+		if err := s.phoneContexts.Upsert(ctx, &domain.PhoneContextState{
+			PhoneNumber:    normalizedPhone,
+			PendingOptions: options,
+			UpdatedAt:      time.Now().UTC(),
+		}); err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = buildAmbiguousContextSelectionReply(options)
+	}
+
+	now := time.Now().UTC()
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	assistantMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      replyText,
+		CreatedAt: now,
+		Type:      chat.MessageTypeText,
+		Provider:  providerOrDefault(message.Provider),
+	}
+	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	return true, chatbot.ProcessResult{
+		PhoneNumber:      normalizedPhone,
+		IncomingMessage:  message,
+		UserMessage:      userMessage,
+		AssistantMessage: assistantMessage,
+	}, nil
 }
 
 func (s *CaptureService) captureProcessedInteraction(ctx context.Context, membership domain.FarmMembership, resolved bool, result chatbot.ProcessResult) error {
@@ -633,6 +840,51 @@ func (s *CaptureService) persistLegacyConversation(ctx context.Context, phoneNum
 	return nil
 }
 
+func (s *CaptureService) persistOnboardingInteraction(ctx context.Context, phoneNumber string, step domain.OnboardingStep, incomingMessage chat.IncomingMessage, assistantMessage chat.Message, createdAt time.Time) error {
+	if s.onboardingMessages == nil {
+		return nil
+	}
+
+	userBody := strings.TrimSpace(incomingMessage.Text)
+	if userBody != "" {
+		userMessage := domain.OnboardingMessage{
+			ID:                uuid.NewString(),
+			PhoneNumber:       phoneNumber,
+			Step:              step,
+			Direction:         domain.OnboardingMessageDirectionInbound,
+			Provider:          providerOrDefault(incomingMessage.Provider),
+			ProviderMessageID: strings.TrimSpace(incomingMessage.MessageID),
+			MessageType:       toDomainMessageType(incomingMessage.Type),
+			Body:              userBody,
+			CreatedAt:         createdAt,
+		}
+		if err := s.onboardingMessages.Create(ctx, &userMessage); err != nil {
+			return err
+		}
+	}
+
+	replyBody := strings.TrimSpace(assistantMessage.Text)
+	if replyBody == "" {
+		return nil
+	}
+
+	reply := domain.OnboardingMessage{
+		ID:          uuid.NewString(),
+		PhoneNumber: phoneNumber,
+		Step:        step,
+		Direction:   domain.OnboardingMessageDirectionOutbound,
+		Provider:    providerOrDefault(assistantMessage.Provider),
+		MessageType: domain.MessageTypeText,
+		Body:        replyBody,
+		CreatedAt:   createdAt,
+	}
+	if err := s.onboardingMessages.Create(ctx, &reply); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type confirmationDecision string
 
 const (
@@ -679,6 +931,10 @@ func buildAmbiguousContextReply() string {
 	return "Seu numero esta vinculado a mais de uma fazenda. Ajuste o cadastro antes de continuar."
 }
 
+func buildSingleContextReply(farmName string) string {
+	return fmt.Sprintf("Seu numero ja esta vinculado a %s.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
+}
+
 func buildAmbiguousContextSelectionReply(options []domain.PhoneContextOption) string {
 	var builder strings.Builder
 	builder.WriteString("Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n")
@@ -706,6 +962,28 @@ func parseContextSelection(text string) int {
 	}
 
 	return int(normalized[0] - '0')
+}
+
+func isContextSwitchCommand(text string) bool {
+	switch normalizeText(text) {
+	case "trocar fazenda", "mudar fazenda", "alternar fazenda", "selecionar fazenda", "trocar contexto", "mudar contexto":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOnboardingStartCommand(text string) bool {
+	switch normalizeText(text) {
+	case "cadastrar", "cadastro", "quero cadastrar", "iniciar cadastro", "me cadastrar":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildAlreadyRegisteredReply() string {
+	return "Seu numero ja esta cadastrado. Pode enviar seus registros normalmente."
 }
 
 func fallbackFarmName(option domain.PhoneContextOption, position int) string {

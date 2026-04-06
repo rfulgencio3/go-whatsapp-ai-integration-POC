@@ -41,6 +41,36 @@ func (s stubFarmMembershipRepository) FindActiveByPhoneNumber(_ context.Context,
 	return s.memberships, s.err
 }
 
+type stubFarmRegistrationRepository struct {
+	membership domain.FarmMembership
+	calls      int
+	err        error
+}
+
+func (s *stubFarmRegistrationRepository) CreateInitialRegistration(_ context.Context, phoneNumber, producerName, farmName string) (domain.FarmMembership, error) {
+	if s.err != nil {
+		return domain.FarmMembership{}, s.err
+	}
+	s.calls++
+	if s.membership.ID == "" {
+		now := time.Now().UTC()
+		s.membership = domain.FarmMembership{
+			ID:          "membership-created",
+			FarmID:      "farm-created",
+			FarmName:    farmName,
+			PersonName:  producerName,
+			PhoneNumber: phoneNumber,
+			Role:        domain.RoleOwner,
+			IsPrimary:   true,
+			Status:      "active",
+			VerifiedAt:  &now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+	}
+	return s.membership, nil
+}
+
 type stubPhoneContextStateRepository struct {
 	states map[string]domain.PhoneContextState
 	err    error
@@ -65,6 +95,56 @@ func (s *stubPhoneContextStateRepository) Upsert(_ context.Context, state *domai
 		s.states = make(map[string]domain.PhoneContextState)
 	}
 	s.states[domain.NormalizePhoneNumber(state.PhoneNumber)] = *state
+	return nil
+}
+
+type stubOnboardingStateRepository struct {
+	states map[string]domain.OnboardingState
+	err    error
+}
+
+func (s *stubOnboardingStateRepository) GetByPhoneNumber(_ context.Context, phoneNumber string) (domain.OnboardingState, bool, error) {
+	if s.err != nil {
+		return domain.OnboardingState{}, false, s.err
+	}
+	if s.states == nil {
+		return domain.OnboardingState{}, false, nil
+	}
+	state, ok := s.states[domain.NormalizePhoneNumber(phoneNumber)]
+	return state, ok, nil
+}
+
+func (s *stubOnboardingStateRepository) Upsert(_ context.Context, state *domain.OnboardingState) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states == nil {
+		s.states = make(map[string]domain.OnboardingState)
+	}
+	s.states[domain.NormalizePhoneNumber(state.PhoneNumber)] = *state
+	return nil
+}
+
+func (s *stubOnboardingStateRepository) DeleteByPhoneNumber(_ context.Context, phoneNumber string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states != nil {
+		delete(s.states, domain.NormalizePhoneNumber(phoneNumber))
+	}
+	return nil
+}
+
+type stubOnboardingMessageRepository struct {
+	messages []domain.OnboardingMessage
+	err      error
+}
+
+func (s *stubOnboardingMessageRepository) Create(_ context.Context, message *domain.OnboardingMessage) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.messages = append(s.messages, *message)
 	return nil
 }
 
@@ -290,6 +370,8 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 			},
 		},
 		nil,
+		nil,
+		nil,
 		conversations,
 		sourceMessages,
 		transcriptions,
@@ -378,6 +460,8 @@ func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
 			},
 		},
 		nil,
+		nil,
+		nil,
 		conversations,
 		sourceMessages,
 		transcriptions,
@@ -437,6 +521,8 @@ func TestCaptureServiceRepliesWhenPhoneNumberIsNotRegistered(t *testing.T) {
 		NewRuleBasedInterpreter(),
 		stubFarmMembershipRepository{},
 		nil,
+		nil,
+		nil,
 		&stubConversationRepository{},
 		sourceMessages,
 		transcriptions,
@@ -476,6 +562,163 @@ func TestCaptureServiceRepliesWhenPhoneNumberIsNotRegistered(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceStartsOnboardingForUnregisteredPhoneNumber(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	onboardingStates := &stubOnboardingStateRepository{}
+	onboardingMessages := &stubOnboardingMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{},
+		nil,
+		nil,
+		onboardingStates,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+		onboardingMessages,
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-onboarding-start",
+		PhoneNumber: "5511999999999",
+		Text:        "cadastrar",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if got := result.AssistantMessage.Text; got != "Vamos fazer seu cadastro inicial. Qual o nome do produtor ou responsavel?" {
+		t.Fatalf("expected onboarding start reply, got %q", got)
+	}
+	state, found, err := onboardingStates.GetByPhoneNumber(context.Background(), "5511999999999")
+	if err != nil {
+		t.Fatalf("GetByPhoneNumber() error = %v", err)
+	}
+	if !found || state.Step != domain.OnboardingStepAwaitingProducerName {
+		t.Fatalf("expected onboarding state awaiting producer name, got %+v", state)
+	}
+	if len(onboardingMessages.messages) != 2 {
+		t.Fatalf("expected onboarding messages to be persisted, got %d", len(onboardingMessages.messages))
+	}
+	if onboardingMessages.messages[0].Direction != domain.OnboardingMessageDirectionInbound {
+		t.Fatalf("expected first onboarding message to be inbound, got %q", onboardingMessages.messages[0].Direction)
+	}
+	if onboardingMessages.messages[1].Direction != domain.OnboardingMessageDirectionOutbound {
+		t.Fatalf("expected second onboarding message to be outbound, got %q", onboardingMessages.messages[1].Direction)
+	}
+	if onboardingMessages.messages[1].Step != domain.OnboardingStepAwaitingProducerName {
+		t.Fatalf("expected onboarding step awaiting producer name, got %q", onboardingMessages.messages[1].Step)
+	}
+}
+
+func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	registration := &stubFarmRegistrationRepository{}
+	onboardingStates := &stubOnboardingStateRepository{
+		states: map[string]domain.OnboardingState{
+			"5511999999999": {
+				PhoneNumber: "5511999999999",
+				Step:        domain.OnboardingStepAwaitingProducerName,
+			},
+		},
+	}
+	onboardingMessages := &stubOnboardingMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{},
+		registration,
+		nil,
+		onboardingStates,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+		onboardingMessages,
+	)
+
+	producerStep, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-onboarding-producer",
+		PhoneNumber: "5511999999999",
+		Text:        "Joao da Silva",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("producer step ProcessIncomingMessage() error = %v", err)
+	}
+	if got := producerStep.AssistantMessage.Text; got != "Agora envie o nome da fazenda ou negocio." {
+		t.Fatalf("expected onboarding producer reply, got %q", got)
+	}
+
+	state, found, err := onboardingStates.GetByPhoneNumber(context.Background(), "5511999999999")
+	if err != nil {
+		t.Fatalf("GetByPhoneNumber() error = %v", err)
+	}
+	if !found || state.Step != domain.OnboardingStepAwaitingFarmName || state.ProducerName != "Joao da Silva" {
+		t.Fatalf("expected onboarding state awaiting farm name, got %+v", state)
+	}
+
+	farmStep, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-onboarding-farm",
+		PhoneNumber: "5511999999999",
+		Text:        "Fazenda Boa Vista",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("farm step ProcessIncomingMessage() error = %v", err)
+	}
+	if registration.calls != 1 {
+		t.Fatalf("expected registration to be created once, got %d", registration.calls)
+	}
+	if got := farmStep.AssistantMessage.Text; got != "Cadastro concluido. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode enviar registros." {
+		t.Fatalf("expected onboarding completion reply, got %q", got)
+	}
+	if _, found, err := onboardingStates.GetByPhoneNumber(context.Background(), "5511999999999"); err != nil || found {
+		t.Fatalf("expected onboarding state to be deleted, found=%v err=%v", found, err)
+	}
+	if len(onboardingMessages.messages) != 4 {
+		t.Fatalf("expected onboarding trace for both steps, got %d", len(onboardingMessages.messages))
+	}
+	lastMessage := onboardingMessages.messages[len(onboardingMessages.messages)-1]
+	if lastMessage.Direction != domain.OnboardingMessageDirectionOutbound {
+		t.Fatalf("expected last onboarding message to be outbound, got %q", lastMessage.Direction)
+	}
+	if lastMessage.Body != "Cadastro concluido. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode enviar registros." {
+		t.Fatalf("unexpected onboarding completion trace: %q", lastMessage.Body)
+	}
+}
+
 func TestCaptureServiceRepliesWhenPhoneNumberHasAmbiguousContext(t *testing.T) {
 	t.Parallel()
 
@@ -497,7 +740,9 @@ func TestCaptureServiceRepliesWhenPhoneNumberHasAmbiguousContext(t *testing.T) {
 				{ID: "membership-2", FarmID: "farm-2", FarmName: "Sitio Santa Luzia", PhoneNumber: "5511999999999", Status: "active"},
 			},
 		},
+		nil,
 		phoneContexts,
+		nil,
 		&stubConversationRepository{},
 		&stubSourceMessageRepository{},
 		&stubTranscriptionRepository{},
@@ -573,7 +818,9 @@ func TestCaptureServiceSelectsContextForAmbiguousPhoneNumber(t *testing.T) {
 				{ID: "membership-2", FarmID: "farm-2", FarmName: "Sitio Santa Luzia", PhoneNumber: "5511999999999", Status: "active"},
 			},
 		},
+		nil,
 		phoneContexts,
+		nil,
 		&stubConversationRepository{},
 		&stubSourceMessageRepository{},
 		&stubTranscriptionRepository{},
@@ -608,6 +855,126 @@ func TestCaptureServiceSelectsContextForAmbiguousPhoneNumber(t *testing.T) {
 	}
 	if len(state.PendingOptions) != 0 {
 		t.Fatalf("expected pending options to be cleared")
+	}
+}
+
+func TestCaptureServiceSwitchesContextWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	phoneContexts := &stubPhoneContextStateRepository{
+		states: map[string]domain.PhoneContextState{
+			"5511999999999": {
+				PhoneNumber:    "5511999999999",
+				ActiveFarmID:   "farm-1",
+				PendingOptions: nil,
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", FarmName: "Fazenda Boa Vista", PhoneNumber: "5511999999999", Status: "active"},
+				{ID: "membership-2", FarmID: "farm-2", FarmName: "Sitio Santa Luzia", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		phoneContexts,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-switch",
+		PhoneNumber: "5511999999999",
+		Text:        "trocar fazenda",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	expectedReply := "Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n1. Fazenda Boa Vista\n2. Sitio Santa Luzia"
+	if got := result.AssistantMessage.Text; got != expectedReply {
+		t.Fatalf("expected switch-context selection reply, got %q", got)
+	}
+	state, found, err := phoneContexts.GetByPhoneNumber(context.Background(), "5511999999999")
+	if err != nil {
+		t.Fatalf("GetByPhoneNumber() error = %v", err)
+	}
+	if !found || state.ActiveFarmID != "" {
+		t.Fatalf("expected active farm to be cleared, got %+v", state)
+	}
+	if len(state.PendingOptions) != 2 {
+		t.Fatalf("expected pending options after switch request")
+	}
+}
+
+func TestCaptureServiceRepliesWhenSwitchRequestedWithSingleContext(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	phoneContexts := &stubPhoneContextStateRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", FarmName: "Fazenda Boa Vista", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		phoneContexts,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-switch-single",
+		PhoneNumber: "5511999999999",
+		Text:        "trocar fazenda",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if got := result.AssistantMessage.Text; got != "Seu numero ja esta vinculado a Fazenda Boa Vista." {
+		t.Fatalf("expected single-context reply, got %q", got)
 	}
 }
 
@@ -657,6 +1024,8 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
 			},
 		},
+		nil,
+		nil,
 		nil,
 		conversations,
 		sourceMessages,
@@ -752,6 +1121,8 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
 			},
 		},
+		nil,
+		nil,
 		nil,
 		conversations,
 		sourceMessages,
@@ -865,6 +1236,8 @@ func TestCaptureServiceRejectsDraftAndLinksCorrectionMessage(t *testing.T) {
 				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
 			},
 		},
+		nil,
+		nil,
 		nil,
 		conversations,
 		sourceMessages,

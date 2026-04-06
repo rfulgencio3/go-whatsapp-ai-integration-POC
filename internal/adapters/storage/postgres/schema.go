@@ -47,6 +47,25 @@ var schemaStatements = []string{
 		pending_options JSONB,
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`,
+	`CREATE TABLE IF NOT EXISTS onboarding_states (
+		phone_number TEXT PRIMARY KEY,
+		step TEXT NOT NULL,
+		producer_name TEXT,
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE TABLE IF NOT EXISTS onboarding_messages (
+		id UUID PRIMARY KEY,
+		phone_number TEXT NOT NULL,
+		step TEXT,
+		direction TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		provider_message_id TEXT,
+		message_type TEXT NOT NULL,
+		body TEXT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_onboarding_messages_phone_created_at
+		ON onboarding_messages(phone_number, created_at DESC)`,
 	`CREATE TABLE IF NOT EXISTS conversations (
 		id UUID PRIMARY KEY,
 		farm_id UUID NOT NULL REFERENCES farms(id),

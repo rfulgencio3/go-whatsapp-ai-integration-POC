@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,11 +16,23 @@ type FarmMembershipRepository struct {
 	database *sql.DB
 }
 
+type FarmRegistrationRepository struct {
+	database *sql.DB
+}
+
 type ConversationRepository struct {
 	database *sql.DB
 }
 
 type PhoneContextStateRepository struct {
+	database *sql.DB
+}
+
+type OnboardingStateRepository struct {
+	database *sql.DB
+}
+
+type OnboardingMessageRepository struct {
 	database *sql.DB
 }
 
@@ -47,12 +60,24 @@ func NewFarmMembershipRepository(database *sql.DB) *FarmMembershipRepository {
 	return &FarmMembershipRepository{database: database}
 }
 
+func NewFarmRegistrationRepository(database *sql.DB) *FarmRegistrationRepository {
+	return &FarmRegistrationRepository{database: database}
+}
+
 func NewConversationRepository(database *sql.DB) *ConversationRepository {
 	return &ConversationRepository{database: database}
 }
 
 func NewPhoneContextStateRepository(database *sql.DB) *PhoneContextStateRepository {
 	return &PhoneContextStateRepository{database: database}
+}
+
+func NewOnboardingStateRepository(database *sql.DB) *OnboardingStateRepository {
+	return &OnboardingStateRepository{database: database}
+}
+
+func NewOnboardingMessageRepository(database *sql.DB) *OnboardingMessageRepository {
+	return &OnboardingMessageRepository{database: database}
 }
 
 func NewSourceMessageRepository(database *sql.DB) *SourceMessageRepository {
@@ -122,6 +147,100 @@ func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, 
 	return memberships, nil
 }
 
+func (r *FarmRegistrationRepository) CreateInitialRegistration(ctx context.Context, phoneNumber, producerName, farmName string) (agro.FarmMembership, error) {
+	tx, err := r.database.BeginTx(ctx, nil)
+	if err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("begin registration transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	now := time.Now().UTC()
+	producerID := uuid.NewString()
+	farmID := uuid.NewString()
+	membershipID := uuid.NewString()
+	normalizedPhone := agro.NormalizePhoneNumber(phoneNumber)
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO producers (id, name, status, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5)`,
+		producerID,
+		strings.TrimSpace(producerName),
+		"active",
+		now,
+		now,
+	); err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("insert producer: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO farms (id, producer_id, name, activity_type, timezone, status, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		farmID,
+		producerID,
+		strings.TrimSpace(farmName),
+		string(agro.ActivityMixed),
+		"America/Sao_Paulo",
+		"active",
+		now,
+		now,
+	); err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("insert farm: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO farm_memberships (id, farm_id, person_name, phone_number, role, is_primary, status, verified_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		membershipID,
+		farmID,
+		strings.TrimSpace(producerName),
+		normalizedPhone,
+		string(agro.RoleOwner),
+		true,
+		"active",
+		now,
+		now,
+		now,
+	); err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("insert farm membership: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO phone_context_states (phone_number, active_farm_id, pending_options, updated_at)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (phone_number) DO UPDATE
+		SET active_farm_id = EXCLUDED.active_farm_id,
+			pending_options = EXCLUDED.pending_options,
+			updated_at = EXCLUDED.updated_at`,
+		normalizedPhone,
+		farmID,
+		[]byte("[]"),
+		now,
+	); err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("upsert phone context after registration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return agro.FarmMembership{}, fmt.Errorf("commit registration transaction: %w", err)
+	}
+
+	verifiedAt := now
+	return agro.FarmMembership{
+		ID:          membershipID,
+		FarmID:      farmID,
+		FarmName:    strings.TrimSpace(farmName),
+		PersonName:  strings.TrimSpace(producerName),
+		PhoneNumber: normalizedPhone,
+		Role:        agro.RoleOwner,
+		IsPrimary:   true,
+		Status:      "active",
+		VerifiedAt:  &verifiedAt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, nil
+}
+
 func (r *PhoneContextStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.PhoneContextState, bool, error) {
 	var state agro.PhoneContextState
 	var activeFarmID sql.NullString
@@ -189,6 +308,109 @@ func (r *PhoneContextStateRepository) Upsert(ctx context.Context, state *agro.Ph
 	)
 	if err != nil {
 		return fmt.Errorf("upsert phone context state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *OnboardingStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.OnboardingState, bool, error) {
+	var state agro.OnboardingState
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT phone_number, step, producer_name, updated_at
+		FROM onboarding_states
+		WHERE phone_number = $1`,
+		agro.NormalizePhoneNumber(phoneNumber),
+	).Scan(
+		&state.PhoneNumber,
+		&state.Step,
+		&state.ProducerName,
+		&state.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.OnboardingState{}, false, nil
+	}
+	if err != nil {
+		return agro.OnboardingState{}, false, fmt.Errorf("query onboarding state: %w", err)
+	}
+
+	return state, true, nil
+}
+
+func (r *OnboardingStateRepository) Upsert(ctx context.Context, state *agro.OnboardingState) error {
+	if state == nil {
+		return fmt.Errorf("upsert onboarding state: nil state")
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO onboarding_states (phone_number, step, producer_name, updated_at)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (phone_number) DO UPDATE
+		SET step = EXCLUDED.step,
+			producer_name = EXCLUDED.producer_name,
+			updated_at = EXCLUDED.updated_at`,
+		agro.NormalizePhoneNumber(state.PhoneNumber),
+		string(state.Step),
+		nullIfEmpty(strings.TrimSpace(state.ProducerName)),
+		state.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert onboarding state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *OnboardingStateRepository) DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`DELETE FROM onboarding_states WHERE phone_number = $1`,
+		agro.NormalizePhoneNumber(phoneNumber),
+	)
+	if err != nil {
+		return fmt.Errorf("delete onboarding state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *OnboardingMessageRepository) Create(ctx context.Context, message *agro.OnboardingMessage) error {
+	if message == nil {
+		return fmt.Errorf("create onboarding message: nil message")
+	}
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = time.Now().UTC()
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO onboarding_messages (
+			id,
+			phone_number,
+			step,
+			direction,
+			provider,
+			provider_message_id,
+			message_type,
+			body,
+			created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		message.ID,
+		agro.NormalizePhoneNumber(message.PhoneNumber),
+		nullIfEmpty(string(message.Step)),
+		string(message.Direction),
+		message.Provider,
+		nullIfEmpty(message.ProviderMessageID),
+		string(message.MessageType),
+		message.Body,
+		message.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert onboarding message: %w", err)
 	}
 
 	return nil
