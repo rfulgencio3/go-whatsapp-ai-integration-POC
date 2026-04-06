@@ -113,9 +113,10 @@ func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, 
 
 func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, channel, senderPhoneNumber string, lastMessageAt time.Time) (agro.Conversation, error) {
 	var conversation agro.Conversation
+	var pendingConfirmationEventID sql.NullString
 	row := r.database.QueryRowContext(
 		ctx,
-		`SELECT id, farm_id, channel, sender_phone_number, status, last_message_at, created_at, updated_at
+		`SELECT id, farm_id, channel, sender_phone_number, pending_confirmation_event_id, status, last_message_at, created_at, updated_at
 		FROM conversations
 		WHERE farm_id = $1 AND channel = $2 AND sender_phone_number = $3 AND status = 'open'
 		ORDER BY updated_at DESC
@@ -129,12 +130,16 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 		&conversation.FarmID,
 		&conversation.Channel,
 		&conversation.SenderPhoneNumber,
+		&pendingConfirmationEventID,
 		&conversation.Status,
 		&conversation.LastMessageAt,
 		&conversation.CreatedAt,
 		&conversation.UpdatedAt,
 	)
 	if err == nil {
+		if pendingConfirmationEventID.Valid {
+			conversation.PendingConfirmationEventID = pendingConfirmationEventID.String
+		}
 		if !lastMessageAt.IsZero() {
 			if _, updateErr := r.database.ExecContext(
 				ctx,
@@ -176,15 +181,17 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 			farm_id,
 			channel,
 			sender_phone_number,
+			pending_confirmation_event_id,
 			status,
 			last_message_at,
 			created_at,
 			updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		conversation.ID,
 		conversation.FarmID,
 		conversation.Channel,
 		conversation.SenderPhoneNumber,
+		nil,
 		string(conversation.Status),
 		conversation.LastMessageAt,
 		conversation.CreatedAt,
@@ -195,6 +202,23 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 	}
 
 	return conversation, nil
+}
+
+func (r *ConversationRepository) SetPendingConfirmationEvent(ctx context.Context, conversationID, eventID string) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`UPDATE conversations
+		SET pending_confirmation_event_id = $2,
+			updated_at = NOW()
+		WHERE id = $1`,
+		conversationID,
+		nullIfEmpty(eventID),
+	)
+	if err != nil {
+		return fmt.Errorf("update conversation pending confirmation event: %w", err)
+	}
+
+	return nil
 }
 
 func (r *SourceMessageRepository) Create(ctx context.Context, message *agro.SourceMessage) error {
@@ -387,7 +411,7 @@ func (r *BusinessEventRepository) Create(ctx context.Context, event *agro.Busine
 	return nil
 }
 
-func (r *BusinessEventRepository) FindLatestDraftByFarm(ctx context.Context, farmID string) (agro.BusinessEvent, bool, error) {
+func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) (agro.BusinessEvent, bool, error) {
 	var event agro.BusinessEvent
 	var occurredAt sql.NullTime
 	var amount sql.NullFloat64
@@ -419,10 +443,8 @@ func (r *BusinessEventRepository) FindLatestDraftByFarm(ctx context.Context, far
 			created_at,
 			updated_at
 		FROM business_events
-		WHERE farm_id = $1 AND status = 'draft'
-		ORDER BY created_at DESC
-		LIMIT 1`,
-		farmID,
+		WHERE id = $1`,
+		eventID,
 	).Scan(
 		&event.ID,
 		&event.FarmID,
@@ -450,7 +472,7 @@ func (r *BusinessEventRepository) FindLatestDraftByFarm(ctx context.Context, far
 		return agro.BusinessEvent{}, false, nil
 	}
 	if err != nil {
-		return agro.BusinessEvent{}, false, fmt.Errorf("query latest draft business event: %w", err)
+		return agro.BusinessEvent{}, false, fmt.Errorf("query business event by id: %w", err)
 	}
 	if occurredAt.Valid {
 		timestamp := occurredAt.Time

@@ -41,6 +41,13 @@ func (s *stubConversationRepository) GetOrCreateOpen(_ context.Context, _, _, _ 
 	return s.conversation, s.err
 }
 
+func (s *stubConversationRepository) SetPendingConfirmationEvent(_ context.Context, conversationID, eventID string) error {
+	if s.conversation.ID == conversationID {
+		s.conversation.PendingConfirmationEventID = eventID
+	}
+	return s.err
+}
+
 type stubSourceMessageRepository struct {
 	messages []domain.SourceMessage
 	err      error
@@ -106,13 +113,13 @@ func (s *stubBusinessEventRepository) Create(_ context.Context, event *domain.Bu
 	return nil
 }
 
-func (s *stubBusinessEventRepository) FindLatestDraftByFarm(_ context.Context, farmID string) (domain.BusinessEvent, bool, error) {
+func (s *stubBusinessEventRepository) FindByID(_ context.Context, eventID string) (domain.BusinessEvent, bool, error) {
 	if s.err != nil {
 		return domain.BusinessEvent{}, false, s.err
 	}
-	for i := len(s.events) - 1; i >= 0; i-- {
+	for i := range s.events {
 		event := s.events[i]
-		if event.FarmID == farmID && event.Status == domain.EventStatusDraft {
+		if event.ID == eventID {
 			return event, true, nil
 		}
 	}
@@ -276,6 +283,9 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 	}
 	if len(assistantMessages.messages) != 2 {
 		t.Fatalf("expected two assistant messages, got %d", len(assistantMessages.messages))
+	}
+	if conversations.conversation.PendingConfirmationEventID == "" {
+		t.Fatalf("expected pending confirmation event id to be set")
 	}
 	if assistantMessages.messages[1].ReplyType != domain.ReplyTypeConfirmation {
 		t.Fatalf("expected second assistant message to be a confirmation prompt, got %q", assistantMessages.messages[1].ReplyType)
@@ -469,6 +479,7 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 			},
 		},
 	}
+	conversations.conversation.PendingConfirmationEventID = "event-1"
 	assistantMessages := &stubAssistantMessageRepository{}
 	sender := &stubChatMessageSender{}
 	chatHistory := newStubChatConversationRepository()
@@ -513,6 +524,9 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	}
 	if businessEvents.events[0].Status != domain.EventStatusConfirmed {
 		t.Fatalf("expected event to be confirmed, got %q", businessEvents.events[0].Status)
+	}
+	if conversations.conversation.PendingConfirmationEventID != "" {
+		t.Fatalf("expected pending confirmation event id to be cleared")
 	}
 	if !businessEvents.events[0].ConfirmedByUser {
 		t.Fatalf("expected event confirmed by user")

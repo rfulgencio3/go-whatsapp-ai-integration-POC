@@ -83,14 +83,15 @@ type FarmContext struct {
 }
 
 type Conversation struct {
-	ID                string
-	FarmID            string
-	Channel           string
-	SenderPhoneNumber string
-	Status            ConversationStatus
-	LastMessageAt     time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                         string
+	FarmID                     string
+	Channel                    string
+	SenderPhoneNumber          string
+	PendingConfirmationEventID string
+	Status                     ConversationStatus
+	LastMessageAt              time.Time
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 type SourceMessage struct {

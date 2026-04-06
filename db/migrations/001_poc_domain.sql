@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     farm_id UUID NOT NULL REFERENCES farms(id),
     channel TEXT NOT NULL,
     sender_phone_number TEXT NOT NULL,
+    pending_confirmation_event_id TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     last_message_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

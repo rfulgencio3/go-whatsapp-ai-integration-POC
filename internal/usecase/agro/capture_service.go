@@ -153,6 +153,11 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, member
 	if err := s.persistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, result.AssistantMessage, replyType, receivedAt); err != nil {
 		return err
 	}
+	if requiresConfirmation {
+		if err := s.conversations.SetPendingConfirmationEvent(ctx, conversation.ID, event.ID); err != nil {
+			return err
+		}
+	}
 	if requiresConfirmation && result.AssistantReplyKind != chatbot.ReplyKindConfirmation {
 		if err := s.sendDraftConfirmationPrompt(ctx, phoneNumber, conversation.ID, sourceMessage.ID, event, receivedAt); err != nil {
 			return err
@@ -353,22 +358,30 @@ func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber stri
 
 func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
 	decision := classifyConfirmationDecision(message.Text)
-	if decision == "" || s.businessEvents == nil || s.messageSender == nil {
-		return false, chatbot.ProcessResult{}, nil
-	}
-
-	event, found, err := s.businessEvents.FindLatestDraftByFarm(ctx, membership.FarmID)
-	if err != nil {
-		return false, chatbot.ProcessResult{}, err
-	}
-	if !found {
+	if decision == "" || s.businessEvents == nil || s.messageSender == nil || s.conversations == nil {
 		return false, chatbot.ProcessResult{}, nil
 	}
 
 	now := time.Now().UTC()
+	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	conversation, err := s.conversations.GetOrCreateOpen(ctx, membership.FarmID, "whatsapp", normalizedPhone, now)
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+	if strings.TrimSpace(conversation.PendingConfirmationEventID) == "" {
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	event, found, err := s.businessEvents.FindByID(ctx, conversation.PendingConfirmationEventID)
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+	if !found || event.Status != domain.EventStatusDraft {
+		return false, chatbot.ProcessResult{}, nil
+	}
 	status := domain.EventStatusRejected
 	confirmedByUser := false
-	replyText := "Entendi. Não vou considerar esse registro. Se quiser, me envie a correção."
+	replyText := buildRejectedReply()
 	if decision == confirmationAccepted {
 		status = domain.EventStatusConfirmed
 		confirmedByUser = true
@@ -382,13 +395,16 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 	if err := s.businessEvents.UpdateStatus(ctx, event.ID, status, confirmedByUser, confirmedAt); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
+	if err := s.conversations.SetPendingConfirmationEvent(ctx, conversation.ID, ""); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
 
-	conversation, sourceMessage, err := s.persistConfirmationInbound(ctx, membership, message, now)
+	savedConversation, sourceMessage, err := s.persistConfirmationInbound(ctx, membership, message, now)
 	if err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 
-	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	normalizedPhone = domain.NormalizePhoneNumber(message.PhoneNumber)
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
@@ -404,7 +420,7 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
-	if err := s.persistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeConfirmation, now); err != nil {
+	if err := s.persistAssistantMessage(ctx, savedConversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeConfirmation, now); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 
@@ -497,6 +513,10 @@ func buildConfirmedReply(event domain.BusinessEvent) string {
 	default:
 		return "Registro confirmado com sucesso."
 	}
+}
+
+func buildRejectedReply() string {
+	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
 }
 
 func buildDraftConfirmationPrompt(event domain.BusinessEvent) string {

@@ -46,11 +46,13 @@ var schemaStatements = []string{
 		farm_id UUID NOT NULL REFERENCES farms(id),
 		channel TEXT NOT NULL,
 		sender_phone_number TEXT NOT NULL,
+		pending_confirmation_event_id TEXT,
 		status TEXT NOT NULL DEFAULT 'open',
 		last_message_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	)`,
+	`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pending_confirmation_event_id TEXT`,
 	`CREATE INDEX IF NOT EXISTS idx_conversations_farm_phone
 		ON conversations(farm_id, sender_phone_number)`,
 	`CREATE TABLE IF NOT EXISTS source_messages (
