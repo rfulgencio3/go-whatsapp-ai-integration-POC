@@ -33,6 +33,8 @@ type InterpretationRunRepository interface {
 
 type BusinessEventRepository interface {
 	Create(ctx context.Context, event *domain.BusinessEvent) error
+	FindLatestDraftByFarm(ctx context.Context, farmID string) (domain.BusinessEvent, bool, error)
+	UpdateStatus(ctx context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error
 }
 
 type AssistantMessageRepository interface {

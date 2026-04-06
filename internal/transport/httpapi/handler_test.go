@@ -149,7 +149,7 @@ func TestHandleMetricsReturnsSnapshot(t *testing.T) {
 
 func newTestHandler(cfg config.Config) (*Handler, *stubQueue) {
 	logger := observability.NewLogger()
-	service := chatbot.NewService("", fallback.NewGenerator(), noop.NewSender(logger), nil, memory.NewConversationRepository(12), nooparchive.NewMessageArchive(), memoryidempotency.NewStore(config.DefaultWebhookIdempotencyTTL, config.DefaultWebhookProcessingTTL))
+	service := chatbot.NewService("", fallback.NewGenerator(), nil, noop.NewSender(logger), nil, memory.NewConversationRepository(12), nooparchive.NewMessageArchive(), memoryidempotency.NewStore(config.DefaultWebhookIdempotencyTTL, config.DefaultWebhookProcessingTTL))
 	queue := &stubQueue{}
 	return NewHandler(service, queue, cfg, logger, observability.NewMetrics()), queue
 }

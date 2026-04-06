@@ -117,13 +117,18 @@ func New(cfg config.Config) (*Application, error) {
 		incomingPreprocessor = twilioinbound.NewPreprocessor(httpClient, cfg.TwilioAccountSID, cfg.TwilioAuthToken, cfg.TranscriptionMaxBytes, transcriptionClient)
 	}
 
-	chatbotService := chatbot.NewService(cfg.AllowedPhoneNumber, replyGenerator, messageSender, incomingPreprocessor, conversationRepository, messageArchive, messageDeduplicator)
+	interpreter := agrousecase.NewRuleBasedInterpreter()
+	replyOverrideResolver := agrousecase.NewReplyOverrideResolver(interpreter)
+	chatbotService := chatbot.NewService(cfg.AllowedPhoneNumber, replyGenerator, replyOverrideResolver, messageSender, incomingPreprocessor, conversationRepository, messageArchive, messageDeduplicator)
 	messageProcessor := chatbot.MessageProcessor(chatbotService)
 	if database != nil {
 		messageProcessor = agrousecase.NewCaptureService(
 			logger,
 			chatbotService,
-			agrousecase.NewRuleBasedInterpreter(),
+			messageSender,
+			conversationRepository,
+			messageArchive,
+			interpreter,
 			storagepostgres.NewFarmMembershipRepository(database),
 			storagepostgres.NewConversationRepository(database),
 			storagepostgres.NewSourceMessageRepository(database),

@@ -11,16 +11,18 @@ import (
 )
 
 type ProcessResult struct {
-	Duplicate        bool
-	PhoneNumber      string
-	IncomingMessage  chat.IncomingMessage
-	UserMessage      chat.Message
-	AssistantMessage chat.Message
+	Duplicate          bool
+	PhoneNumber        string
+	IncomingMessage    chat.IncomingMessage
+	UserMessage        chat.Message
+	AssistantMessage   chat.Message
+	AssistantReplyKind ReplyKind
 }
 
 type Service struct {
 	allowedPhoneNumber     string
 	replyGenerator         ReplyGenerator
+	replyOverrideResolver  ReplyOverrideResolver
 	messageSender          MessageSender
 	incomingPreprocessor   IncomingMessagePreprocessor
 	conversationRepository ConversationRepository
@@ -36,6 +38,7 @@ const unsupportedInboundReply = "No momento consigo processar mensagens de texto
 func NewService(
 	allowedPhoneNumber string,
 	replyGenerator ReplyGenerator,
+	replyOverrideResolver ReplyOverrideResolver,
 	messageSender MessageSender,
 	incomingPreprocessor IncomingMessagePreprocessor,
 	conversationRepository ConversationRepository,
@@ -52,6 +55,7 @@ func NewService(
 	return &Service{
 		allowedPhoneNumber:     chat.NormalizePhoneNumber(allowedPhoneNumber),
 		replyGenerator:         replyGenerator,
+		replyOverrideResolver:  replyOverrideResolver,
 		messageSender:          messageSender,
 		incomingPreprocessor:   incomingPreprocessor,
 		conversationRepository: conversationRepository,
@@ -126,6 +130,12 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 		return s.sendUnsupportedReply(ctx, preparedMessage)
 	}
 
+	if override, ok, err := s.resolveOverrideReply(ctx, preparedMessage); err != nil {
+		return ProcessResult{}, err
+	} else if ok {
+		return s.sendOverrideReply(ctx, preparedMessage, override)
+	}
+
 	normalizedPhoneNumber, userChatMessage, assistantChatMessage, err := s.buildReplyArtifacts(ctx, preparedMessage)
 	if err != nil {
 		return ProcessResult{}, err
@@ -140,10 +150,11 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 	}
 
 	return ProcessResult{
-		PhoneNumber:      normalizedPhoneNumber,
-		IncomingMessage:  preparedMessage,
-		UserMessage:      userChatMessage,
-		AssistantMessage: assistantChatMessage,
+		PhoneNumber:        normalizedPhoneNumber,
+		IncomingMessage:    preparedMessage,
+		UserMessage:        userChatMessage,
+		AssistantMessage:   assistantChatMessage,
+		AssistantReplyKind: ReplyKindText,
 	}, nil
 }
 
@@ -201,11 +212,55 @@ func (s *Service) sendUnsupportedReply(ctx context.Context, incomingMessage chat
 	}
 
 	return ProcessResult{
-		PhoneNumber:      normalizedPhoneNumber,
-		IncomingMessage:  incomingMessage,
-		UserMessage:      userChatMessage,
-		AssistantMessage: assistantChatMessage,
+		PhoneNumber:        normalizedPhoneNumber,
+		IncomingMessage:    incomingMessage,
+		UserMessage:        userChatMessage,
+		AssistantMessage:   assistantChatMessage,
+		AssistantReplyKind: ReplyKindText,
 	}, nil
+}
+
+func (s *Service) sendOverrideReply(ctx context.Context, incomingMessage chat.IncomingMessage, override ReplyOverride) (ProcessResult, error) {
+	normalizedPhoneNumber := chat.NormalizePhoneNumber(incomingMessage.PhoneNumber)
+	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
+		return ProcessResult{}, chat.ErrPhoneNumberNotAllowed
+	}
+
+	userChatMessage := buildUserChatMessage(incomingMessage, strings.TrimSpace(incomingMessage.Text))
+	assistantChatMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      strings.TrimSpace(override.Text),
+		CreatedAt: time.Now().UTC(),
+		Type:      chat.MessageTypeText,
+		Provider:  strings.TrimSpace(incomingMessage.Provider),
+	}
+
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
+		return ProcessResult{}, err
+	}
+	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
+		return ProcessResult{}, err
+	}
+
+	if override.Kind == "" {
+		override.Kind = ReplyKindText
+	}
+
+	return ProcessResult{
+		PhoneNumber:        normalizedPhoneNumber,
+		IncomingMessage:    incomingMessage,
+		UserMessage:        userChatMessage,
+		AssistantMessage:   assistantChatMessage,
+		AssistantReplyKind: override.Kind,
+	}, nil
+}
+
+func (s *Service) resolveOverrideReply(ctx context.Context, incomingMessage chat.IncomingMessage) (ReplyOverride, bool, error) {
+	if s.replyOverrideResolver == nil {
+		return ReplyOverride{}, false, nil
+	}
+
+	return s.replyOverrideResolver.ResolveReply(ctx, incomingMessage)
 }
 
 func (s *Service) persistConversation(ctx context.Context, phoneNumber string, userChatMessage, assistantChatMessage chat.Message) error {

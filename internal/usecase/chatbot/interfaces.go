@@ -10,6 +10,22 @@ type ReplyGenerator interface {
 	GenerateReply(ctx context.Context, history []chat.Message) (string, error)
 }
 
+type ReplyKind string
+
+const (
+	ReplyKindText         ReplyKind = "text"
+	ReplyKindConfirmation ReplyKind = "confirmation"
+)
+
+type ReplyOverride struct {
+	Text string
+	Kind ReplyKind
+}
+
+type ReplyOverrideResolver interface {
+	ResolveReply(ctx context.Context, message chat.IncomingMessage) (ReplyOverride, bool, error)
+}
+
 type MessageSender interface {
 	SendTextMessage(ctx context.Context, phoneNumber, body string) error
 }

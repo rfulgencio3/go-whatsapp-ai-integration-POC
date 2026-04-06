@@ -13,9 +13,11 @@ import (
 type stubMessageProcessor struct {
 	result chatbot.ProcessResult
 	err    error
+	calls  int
 }
 
 func (s stubMessageProcessor) ProcessIncomingMessage(_ context.Context, _ chat.IncomingMessage) (chatbot.ProcessResult, error) {
+	s.calls++
 	return s.result, s.err
 }
 
@@ -104,6 +106,82 @@ func (s *stubBusinessEventRepository) Create(_ context.Context, event *domain.Bu
 	return nil
 }
 
+func (s *stubBusinessEventRepository) FindLatestDraftByFarm(_ context.Context, farmID string) (domain.BusinessEvent, bool, error) {
+	if s.err != nil {
+		return domain.BusinessEvent{}, false, s.err
+	}
+	for i := len(s.events) - 1; i >= 0; i-- {
+		event := s.events[i]
+		if event.FarmID == farmID && event.Status == domain.EventStatusDraft {
+			return event, true, nil
+		}
+	}
+	return domain.BusinessEvent{}, false, nil
+}
+
+func (s *stubBusinessEventRepository) UpdateStatus(_ context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error {
+	if s.err != nil {
+		return s.err
+	}
+	for i := range s.events {
+		if s.events[i].ID != eventID {
+			continue
+		}
+		s.events[i].Status = status
+		s.events[i].ConfirmedByUser = confirmedByUser
+		s.events[i].ConfirmedAt = confirmedAt
+		return nil
+	}
+	return nil
+}
+
+type stubChatMessageSender struct {
+	lastPhone string
+	lastBody  string
+	sendCount int
+	err       error
+}
+
+func (s *stubChatMessageSender) SendTextMessage(_ context.Context, phoneNumber, body string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.lastPhone = phoneNumber
+	s.lastBody = body
+	s.sendCount++
+	return nil
+}
+
+type stubChatConversationRepository struct {
+	messages map[string][]chat.Message
+}
+
+func newStubChatConversationRepository() *stubChatConversationRepository {
+	return &stubChatConversationRepository{messages: make(map[string][]chat.Message)}
+}
+
+func (s *stubChatConversationRepository) GetMessages(_ context.Context, phoneNumber string) ([]chat.Message, error) {
+	return append([]chat.Message(nil), s.messages[phoneNumber]...), nil
+}
+
+func (s *stubChatConversationRepository) AppendMessage(_ context.Context, phoneNumber string, message chat.Message) error {
+	s.messages[phoneNumber] = append(s.messages[phoneNumber], message)
+	return nil
+}
+
+type stubChatMessageArchive struct {
+	recorded []chat.Message
+	err      error
+}
+
+func (s *stubChatMessageArchive) RecordMessage(_ context.Context, _ string, message chat.Message) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.recorded = append(s.recorded, message)
+	return nil
+}
+
 func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +196,9 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 	interpretationRuns := &stubInterpretationRunRepository{}
 	businessEvents := &stubBusinessEventRepository{}
 	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
 	service := NewCaptureService(
 		nil,
 		stubMessageProcessor{result: chatbot.ProcessResult{
@@ -135,6 +216,9 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 				Provider: "whatsmeow",
 			},
 		}},
+		sender,
+		chatHistory,
+		archive,
 		NewRuleBasedInterpreter(),
 		stubFarmMembershipRepository{
 			memberships: []domain.FarmMembership{
@@ -175,8 +259,8 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 	if len(transcriptions.transcriptions) != 0 {
 		t.Fatalf("expected no transcription for plain text, got %d", len(transcriptions.transcriptions))
 	}
-	if len(assistantMessages.messages) != 1 {
-		t.Fatalf("expected one assistant message, got %d", len(assistantMessages.messages))
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one confirmation prompt to be sent, got %d", sender.sendCount)
 	}
 	if len(interpretationRuns.runs) != 1 {
 		t.Fatalf("expected one interpretation run, got %d", len(interpretationRuns.runs))
@@ -189,6 +273,12 @@ func TestCaptureServicePersistsSourceMessageWhenContextIsResolved(t *testing.T) 
 	}
 	if got := businessEvents.events[0].Subcategory; got != "input_purchase" {
 		t.Fatalf("expected input_purchase event, got %q", got)
+	}
+	if len(assistantMessages.messages) != 2 {
+		t.Fatalf("expected two assistant messages, got %d", len(assistantMessages.messages))
+	}
+	if assistantMessages.messages[1].ReplyType != domain.ReplyTypeConfirmation {
+		t.Fatalf("expected second assistant message to be a confirmation prompt, got %q", assistantMessages.messages[1].ReplyType)
 	}
 	if got := assistantMessages.messages[0].SourceMessageID; got != sourceMessages.messages[0].ID {
 		t.Fatalf("expected assistant message to link source message, got %q", got)
@@ -204,9 +294,15 @@ func TestCaptureServiceSkipsPersistenceWhenMessageIsDuplicate(t *testing.T) {
 	interpretationRuns := &stubInterpretationRunRepository{}
 	businessEvents := &stubBusinessEventRepository{}
 	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
 	service := NewCaptureService(
 		nil,
 		stubMessageProcessor{result: chatbot.ProcessResult{Duplicate: true}},
+		sender,
+		chatHistory,
+		archive,
 		NewRuleBasedInterpreter(),
 		stubFarmMembershipRepository{
 			memberships: []domain.FarmMembership{
@@ -265,6 +361,9 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 	interpretationRuns := &stubInterpretationRunRepository{}
 	businessEvents := &stubBusinessEventRepository{}
 	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
 	service := NewCaptureService(
 		nil,
 		stubMessageProcessor{result: chatbot.ProcessResult{
@@ -285,6 +384,9 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 				Provider: "twilio",
 			},
 		}},
+		sender,
+		chatHistory,
+		archive,
 		NewRuleBasedInterpreter(),
 		stubFarmMembershipRepository{
 			memberships: []domain.FarmMembership{
@@ -315,6 +417,9 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 	if len(transcriptions.transcriptions) != 1 {
 		t.Fatalf("expected one transcription, got %d", len(transcriptions.transcriptions))
 	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one confirmation prompt to be sent, got %d", sender.sendCount)
+	}
 	if got := transcriptions.transcriptions[0].ProviderRef; got != "external-transcription-id" {
 		t.Fatalf("expected transcription provider ref to be preserved, got %q", got)
 	}
@@ -332,5 +437,99 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 	}
 	if got := businessEvents.events[0].Subcategory; got != "insemination" {
 		t.Fatalf("expected insemination event, got %q", got)
+	}
+	if len(assistantMessages.messages) != 2 {
+		t.Fatalf("expected two assistant messages, got %d", len(assistantMessages.messages))
+	}
+}
+
+func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	transcriptions := &stubTranscriptionRepository{}
+	interpretationRuns := &stubInterpretationRunRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		events: []domain.BusinessEvent{
+			{
+				ID:          "event-1",
+				FarmID:      "farm-1",
+				Category:    "finance",
+				Subcategory: "input_purchase",
+				Amount:      float64Ptr(850),
+				Quantity:    float64Ptr(10),
+				Unit:        "saco",
+				Status:      domain.EventStatusDraft,
+			},
+		},
+	}
+	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	processor := stubMessageProcessor{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		conversations,
+		sourceMessages,
+		transcriptions,
+		interpretationRuns,
+		businessEvents,
+		assistantMessages,
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "confirm-1",
+		PhoneNumber: "5511999999999",
+		Text:        "sim",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if result.AssistantMessage.Text == "" {
+		t.Fatalf("expected assistant confirmation message")
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound confirmation message, got %d", sender.sendCount)
+	}
+	if businessEvents.events[0].Status != domain.EventStatusConfirmed {
+		t.Fatalf("expected event to be confirmed, got %q", businessEvents.events[0].Status)
+	}
+	if !businessEvents.events[0].ConfirmedByUser {
+		t.Fatalf("expected event confirmed by user")
+	}
+	if len(sourceMessages.messages) != 1 {
+		t.Fatalf("expected confirmation source message to be saved, got %d", len(sourceMessages.messages))
+	}
+	if len(assistantMessages.messages) != 1 {
+		t.Fatalf("expected confirmation assistant message to be saved, got %d", len(assistantMessages.messages))
+	}
+	if assistantMessages.messages[0].ReplyType != domain.ReplyTypeConfirmation {
+		t.Fatalf("expected reply type confirmation, got %q", assistantMessages.messages[0].ReplyType)
+	}
+	if len(chatHistory.messages["5511999999999"]) != 2 {
+		t.Fatalf("expected confirmation flow persisted in legacy conversation history")
+	}
+	if len(archive.recorded) != 2 {
+		t.Fatalf("expected confirmation flow archived in legacy archive")
 	}
 }

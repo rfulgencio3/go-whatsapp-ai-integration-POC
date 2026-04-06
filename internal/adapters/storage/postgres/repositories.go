@@ -387,6 +387,112 @@ func (r *BusinessEventRepository) Create(ctx context.Context, event *agro.Busine
 	return nil
 }
 
+func (r *BusinessEventRepository) FindLatestDraftByFarm(ctx context.Context, farmID string) (agro.BusinessEvent, bool, error) {
+	var event agro.BusinessEvent
+	var occurredAt sql.NullTime
+	var amount sql.NullFloat64
+	var quantity sql.NullFloat64
+	var confirmedAt sql.NullTime
+
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT
+			id,
+			farm_id,
+			source_message_id,
+			interpretation_run_id,
+			category,
+			subcategory,
+			occurred_at,
+			description,
+			amount,
+			currency,
+			quantity,
+			unit,
+			animal_code,
+			lot_code,
+			paddock_code,
+			counterparty_name,
+			status,
+			confirmed_by_user,
+			confirmed_at,
+			created_at,
+			updated_at
+		FROM business_events
+		WHERE farm_id = $1 AND status = 'draft'
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		farmID,
+	).Scan(
+		&event.ID,
+		&event.FarmID,
+		&event.SourceMessageID,
+		&event.InterpretationRunID,
+		&event.Category,
+		&event.Subcategory,
+		&occurredAt,
+		&event.Description,
+		&amount,
+		&event.Currency,
+		&quantity,
+		&event.Unit,
+		&event.AnimalCode,
+		&event.LotCode,
+		&event.PaddockCode,
+		&event.CounterpartyName,
+		&event.Status,
+		&event.ConfirmedByUser,
+		&confirmedAt,
+		&event.CreatedAt,
+		&event.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.BusinessEvent{}, false, nil
+	}
+	if err != nil {
+		return agro.BusinessEvent{}, false, fmt.Errorf("query latest draft business event: %w", err)
+	}
+	if occurredAt.Valid {
+		timestamp := occurredAt.Time
+		event.OccurredAt = &timestamp
+	}
+	if amount.Valid {
+		value := amount.Float64
+		event.Amount = &value
+	}
+	if quantity.Valid {
+		value := quantity.Float64
+		event.Quantity = &value
+	}
+	if confirmedAt.Valid {
+		timestamp := confirmedAt.Time
+		event.ConfirmedAt = &timestamp
+	}
+
+	return event, true, nil
+}
+
+func (r *BusinessEventRepository) UpdateStatus(ctx context.Context, eventID string, status agro.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`UPDATE business_events
+		SET status = $2,
+			confirmed_by_user = $3,
+			confirmed_at = $4,
+			updated_at = NOW()
+		WHERE id = $1`,
+		eventID,
+		string(status),
+		confirmedByUser,
+		nullTime(confirmedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("update business event status: %w", err)
+	}
+
+	return nil
+}
+
 func (r *AssistantMessageRepository) Create(ctx context.Context, message *agro.AssistantMessage) error {
 	if message == nil {
 		return fmt.Errorf("create assistant message: nil message")
