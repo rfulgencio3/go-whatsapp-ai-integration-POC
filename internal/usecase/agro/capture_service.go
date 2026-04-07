@@ -553,6 +553,7 @@ func (s *CaptureService) persistInterpretation(ctx context.Context, farmID strin
 		Currency:            interpretation.Currency,
 		Quantity:            interpretation.Quantity,
 		Unit:                interpretation.Unit,
+		AnimalCode:          strings.TrimSpace(interpretation.AnimalCode),
 		Status:              domain.EventStatusDraft,
 		ConfirmedByUser:     false,
 		CreatedAt:           occurredAt,
@@ -560,6 +561,9 @@ func (s *CaptureService) persistInterpretation(ctx context.Context, farmID strin
 	}
 
 	if err := s.businessEvents.Create(ctx, &event); err != nil {
+		return domain.BusinessEvent{}, false, err
+	}
+	if err := s.businessEvents.CreateAttributes(ctx, event.ID, interpretation.Attributes); err != nil {
 		return domain.BusinessEvent{}, false, err
 	}
 
@@ -1012,6 +1016,7 @@ func buildDraftConfirmationPrompt(event domain.BusinessEvent) string {
 		Category:    event.Category,
 		Subcategory: event.Subcategory,
 		Description: event.Description,
+		AnimalCode:  event.AnimalCode,
 		Amount:      event.Amount,
 		Currency:    event.Currency,
 		Quantity:    event.Quantity,
@@ -1044,6 +1049,12 @@ func buildDraftConfirmationPromptFromInterpretation(result InterpretationResult)
 
 func humanCategoryLabel(category, subcategory string) string {
 	switch {
+	case category == "health" && subcategory == "mastitis_treatment":
+		return "Saude animal"
+	case category == "health" && subcategory == "hoof_treatment":
+		return "Saude animal"
+	case category == "health" && subcategory == "bloat":
+		return "Saude animal"
 	case category == "finance" && subcategory == "input_purchase":
 		return "Compra de insumos"
 	case category == "finance" && subcategory == "expense":
@@ -1062,6 +1073,8 @@ func humanCategoryLabel(category, subcategory string) string {
 func buildConfirmationDetail(result InterpretationResult) string {
 	description := strings.TrimSpace(result.Description)
 	switch {
+	case result.Category == "health":
+		return buildHealthConfirmationDetail(result, description)
 	case result.Category == "finance" && result.Subcategory == "input_purchase" && description != "":
 		return fmt.Sprintf("Descricao: %s", description)
 	case result.Category == "finance" && result.Subcategory == "expense" && description != "":
@@ -1078,6 +1091,33 @@ func buildConfirmationDetail(result InterpretationResult) string {
 	default:
 		return ""
 	}
+}
+
+func buildHealthConfirmationDetail(result InterpretationResult, description string) string {
+	lines := make([]string, 0, 4)
+	if strings.TrimSpace(result.AnimalCode) != "" {
+		lines = append(lines, fmt.Sprintf("Animal: %s", result.AnimalCode))
+	}
+	switch result.Subcategory {
+	case "mastitis_treatment":
+		lines = append(lines, "Problema: teta/mastite")
+	case "hoof_treatment":
+		lines = append(lines, "Problema: casco/manqueira")
+	case "bloat":
+		lines = append(lines, "Problema: gases/timpanismo")
+	}
+	if result.Attributes != nil {
+		if teats := strings.TrimSpace(result.Attributes["affected_teats"]); teats != "" {
+			lines = append(lines, fmt.Sprintf("Tetas afetadas: %s", teats))
+		}
+		if strings.EqualFold(strings.TrimSpace(result.Attributes["milk_withdrawal"]), "true") {
+			lines = append(lines, "Restricao: nao tirar leite")
+		}
+	}
+	if description != "" {
+		lines = append(lines, fmt.Sprintf("Descricao: %s", description))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatCurrency(amount *float64, currency string) string {

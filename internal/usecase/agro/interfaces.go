@@ -54,6 +54,7 @@ type InterpretationRunRepository interface {
 
 type BusinessEventRepository interface {
 	Create(ctx context.Context, event *domain.BusinessEvent) error
+	CreateAttributes(ctx context.Context, eventID string, attributes map[string]string) error
 	FindByID(ctx context.Context, eventID string) (domain.BusinessEvent, bool, error)
 	CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error
 	UpdateStatus(ctx context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error
@@ -74,6 +75,7 @@ type InterpretationResult struct {
 	Category             string
 	Subcategory          string
 	Description          string
+	AnimalCode           string
 	Confidence           float64
 	RequiresConfirmation bool
 	Amount               *float64
@@ -81,5 +83,6 @@ type InterpretationResult struct {
 	Quantity             *float64
 	Unit                 string
 	OccurredAt           *time.Time
+	Attributes           map[string]string
 	RawOutputJSON        string
 }

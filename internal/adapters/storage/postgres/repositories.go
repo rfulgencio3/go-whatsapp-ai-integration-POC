@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -749,6 +750,45 @@ func (r *BusinessEventRepository) Create(ctx context.Context, event *agro.Busine
 	)
 	if err != nil {
 		return fmt.Errorf("insert business event: %w", err)
+	}
+
+	return nil
+}
+
+func (r *BusinessEventRepository) CreateAttributes(ctx context.Context, eventID string, attributes map[string]string) error {
+	if len(attributes) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(attributes))
+	for key := range attributes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		value := strings.TrimSpace(attributes[key])
+		if strings.TrimSpace(key) == "" || value == "" {
+			continue
+		}
+		_, err := r.database.ExecContext(
+			ctx,
+			`INSERT INTO event_attributes (
+				id,
+				business_event_id,
+				attr_key,
+				attr_value,
+				created_at
+			) VALUES ($1,$2,$3,$4,$5)`,
+			uuid.NewString(),
+			eventID,
+			key,
+			value,
+			time.Now().UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("insert event attribute: %w", err)
+		}
 	}
 
 	return nil

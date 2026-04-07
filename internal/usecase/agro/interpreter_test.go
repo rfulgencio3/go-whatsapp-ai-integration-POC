@@ -60,6 +60,27 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			expectOccurredAt: true,
 		},
 		{
+			name:             "mastitis treatment",
+			text:             "A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite",
+			expectedIntent:   "health.mastitis_treatment",
+			expectedCategory: "health",
+			expectedSubcat:   "mastitis_treatment",
+		},
+		{
+			name:             "hoof treatment",
+			text:             "A vaca 18 esta mancando por problema de casco",
+			expectedIntent:   "health.hoof_treatment",
+			expectedCategory: "health",
+			expectedSubcat:   "hoof_treatment",
+		},
+		{
+			name:             "bloat",
+			text:             "A vaca 21 esta com gases e barriga inchada",
+			expectedIntent:   "health.bloat",
+			expectedCategory: "health",
+			expectedSubcat:   "bloat",
+		},
+		{
 			name:             "fallback note",
 			text:             "Choveu forte no talhao 4",
 			expectedIntent:   "operations.note",
@@ -103,6 +124,9 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			}
 			if result.RawOutputJSON == "" {
 				t.Fatalf("expected raw output json")
+			}
+			if testCase.expectedCategory == "health" && result.AnimalCode == "" {
+				t.Fatalf("expected animal code for health event")
 			}
 		})
 	}

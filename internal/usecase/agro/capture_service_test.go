@@ -228,6 +228,7 @@ func (s *stubInterpretationRunRepository) Create(_ context.Context, run *domain.
 type stubBusinessEventRepository struct {
 	events          []domain.BusinessEvent
 	correctionLinks map[string]string
+	attributes      map[string]map[string]string
 	err             error
 }
 
@@ -260,6 +261,24 @@ func (s *stubBusinessEventRepository) CreateCorrectionLink(_ context.Context, ev
 		s.correctionLinks = make(map[string]string)
 	}
 	s.correctionLinks[eventID] = correctedEventID
+	return nil
+}
+
+func (s *stubBusinessEventRepository) CreateAttributes(_ context.Context, eventID string, attributes map[string]string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if len(attributes) == 0 {
+		return nil
+	}
+	if s.attributes == nil {
+		s.attributes = make(map[string]map[string]string)
+	}
+	copied := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		copied[key] = value
+	}
+	s.attributes[eventID] = copied
 	return nil
 }
 
@@ -1317,5 +1336,25 @@ func TestBuildDraftConfirmationPromptFromInterpretation(t *testing.T) {
 	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nResponda SIM para confirmar ou NAO para corrigir."
 	if prompt != expected {
 		t.Fatalf("unexpected confirmation prompt:\n%s", prompt)
+	}
+}
+
+func TestBuildDraftConfirmationPromptFromInterpretationHealth(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
+		Category:    "health",
+		Subcategory: "mastitis_treatment",
+		Description: "A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite",
+		AnimalCode:  "32",
+		Attributes: map[string]string{
+			"affected_teats":  "T1,T3",
+			"milk_withdrawal": "true",
+		},
+	})
+
+	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nResponda SIM para confirmar ou NAO para corrigir."
+	if prompt != expected {
+		t.Fatalf("unexpected health confirmation prompt:\n%s", prompt)
 	}
 }

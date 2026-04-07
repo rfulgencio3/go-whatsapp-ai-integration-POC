@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,25 +20,29 @@ var (
 	currencyBeforePattern = regexp.MustCompile(`r\$\s*(\d+(?:[.,]\d{1,2})?)`)
 	currencyAfterPattern  = regexp.MustCompile(`(\d+(?:[.,]\d{1,2})?)\s*(?:reais|real)`)
 	quantityPattern       = regexp.MustCompile(`(\d+(?:[.,]\d+)?)\s*(sacos?|kg|quilo(?:s|gramas?)?|litros?|l|toneladas?|ton|unidades?|un|cabecas?|cabecas?|cabecas?)`)
+	animalPattern         = regexp.MustCompile(`(?:vaca|matriz|novilha|animal)\s+([a-z0-9-]+)`)
+	teatPattern           = regexp.MustCompile(`t(?:eta)?\s*([1-4])`)
 )
 
 type RuleBasedInterpreter struct{}
 
 type interpretationPayload struct {
-	Provider             string   `json:"provider"`
-	Model                string   `json:"model"`
-	PromptVersion        string   `json:"prompt_version"`
-	NormalizedIntent     string   `json:"normalized_intent"`
-	Category             string   `json:"category"`
-	Subcategory          string   `json:"subcategory"`
-	Description          string   `json:"description"`
-	Confidence           float64  `json:"confidence"`
-	RequiresConfirmation bool     `json:"requires_confirmation"`
-	Amount               *float64 `json:"amount,omitempty"`
-	Currency             string   `json:"currency,omitempty"`
-	Quantity             *float64 `json:"quantity,omitempty"`
-	Unit                 string   `json:"unit,omitempty"`
-	OccurredAt           *string  `json:"occurred_at,omitempty"`
+	Provider             string            `json:"provider"`
+	Model                string            `json:"model"`
+	PromptVersion        string            `json:"prompt_version"`
+	NormalizedIntent     string            `json:"normalized_intent"`
+	Category             string            `json:"category"`
+	Subcategory          string            `json:"subcategory"`
+	Description          string            `json:"description"`
+	AnimalCode           string            `json:"animal_code,omitempty"`
+	Confidence           float64           `json:"confidence"`
+	RequiresConfirmation bool              `json:"requires_confirmation"`
+	Amount               *float64          `json:"amount,omitempty"`
+	Currency             string            `json:"currency,omitempty"`
+	Quantity             *float64          `json:"quantity,omitempty"`
+	Unit                 string            `json:"unit,omitempty"`
+	OccurredAt           *string           `json:"occurred_at,omitempty"`
+	Attributes           map[string]string `json:"attributes,omitempty"`
 }
 
 // NewRuleBasedInterpreter creates the first deterministic agro interpreter used by the POC.
@@ -56,9 +61,32 @@ func (r *RuleBasedInterpreter) Interpret(_ context.Context, input Interpretation
 	result := InterpretationResult{
 		Description: text,
 		OccurredAt:  resolveOccurredAt(text, input.OccurredAt),
+		AnimalCode:  extractAnimalCode(text),
+		Attributes:  make(map[string]string),
 	}
 
 	switch {
+	case isMastitisTreatment(normalizedText):
+		result.NormalizedIntent = "health.mastitis_treatment"
+		result.Category = "health"
+		result.Subcategory = "mastitis_treatment"
+		result.Confidence = 0.94
+		result.RequiresConfirmation = true
+		enrichMastitisAttributes(result.Attributes, text, normalizedText)
+	case isHoofTreatment(normalizedText):
+		result.NormalizedIntent = "health.hoof_treatment"
+		result.Category = "health"
+		result.Subcategory = "hoof_treatment"
+		result.Confidence = 0.90
+		result.RequiresConfirmation = true
+		result.Attributes["health_issue_type"] = "casco"
+	case isBloat(normalizedText):
+		result.NormalizedIntent = "health.bloat"
+		result.Category = "health"
+		result.Subcategory = "bloat"
+		result.Confidence = 0.88
+		result.RequiresConfirmation = true
+		result.Attributes["health_issue_type"] = "gases"
 	case containsAny(normalizedText, "insemin"):
 		result.NormalizedIntent = "reproduction.insemination"
 		result.Category = "reproduction"
@@ -96,9 +124,24 @@ func (r *RuleBasedInterpreter) Interpret(_ context.Context, input Interpretation
 		result.Currency = "BRL"
 	}
 	result.Quantity, result.Unit = extractQuantity(text)
+	if len(result.Attributes) == 0 {
+		result.Attributes = nil
+	}
 	result.RawOutputJSON = buildInterpretationPayload(result)
 
 	return result, nil
+}
+
+func isMastitisTreatment(text string) bool {
+	return containsAny(text, "teta", "mastite", "ubere", "úbere", "nao pode tirar leite", "não pode tirar leite")
+}
+
+func isHoofTreatment(text string) bool {
+	return containsAny(text, "casco", "manco", "manqueira", "claudic", "pododermat")
+}
+
+func isBloat(text string) bool {
+	return containsAny(text, "gases", "estufad", "inchad", "timpan", "empanz")
 }
 
 func isInputPurchase(text string) bool {
@@ -257,6 +300,57 @@ func normalizeUnit(unit string) string {
 	}
 }
 
+func extractAnimalCode(text string) string {
+	matches := animalPattern.FindStringSubmatch(normalizeText(text))
+	if len(matches) < 2 {
+		return ""
+	}
+
+	return strings.ToUpper(strings.TrimSpace(matches[1]))
+}
+
+func enrichMastitisAttributes(attributes map[string]string, text, normalizedText string) {
+	if attributes == nil {
+		return
+	}
+
+	teats := extractAffectedTeats(text)
+	if len(teats) > 0 {
+		attributes["affected_teats"] = strings.Join(teats, ",")
+	}
+	if containsAny(normalizedText, "nao pode tirar leite", "não pode tirar leite", "descartar leite", "nao tirar leite") {
+		attributes["milk_withdrawal"] = "true"
+	}
+	attributes["health_issue_type"] = "teta"
+}
+
+func extractAffectedTeats(text string) []string {
+	matches := teatPattern.FindAllStringSubmatch(normalizeText(text), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	unique := make(map[string]struct{})
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		label := "T" + strings.TrimSpace(match[1])
+		unique[label] = struct{}{}
+	}
+
+	if len(unique) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(unique))
+	for label := range unique {
+		result = append(result, label)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func resolveOccurredAt(text string, fallback time.Time) *time.Time {
 	if containsAny(normalizeText(text), "hoje") && !fallback.IsZero() {
 		timestamp := fallback.UTC()
@@ -275,12 +369,14 @@ func buildInterpretationPayload(result InterpretationResult) string {
 		Category:             result.Category,
 		Subcategory:          result.Subcategory,
 		Description:          result.Description,
+		AnimalCode:           result.AnimalCode,
 		Confidence:           result.Confidence,
 		RequiresConfirmation: result.RequiresConfirmation,
 		Amount:               result.Amount,
 		Currency:             result.Currency,
 		Quantity:             result.Quantity,
 		Unit:                 result.Unit,
+		Attributes:           result.Attributes,
 	}
 	if result.OccurredAt != nil {
 		formatted := result.OccurredAt.UTC().Format(time.RFC3339)
