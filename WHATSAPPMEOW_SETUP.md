@@ -58,13 +58,21 @@ Comportamento esperado:
 
 O numero que envia a mensagem e resolvido por `farm_memberships.phone_number`.
 
-Fluxo:
+Forma recomendada:
+
+```powershell
+$env:DATABASE_URL="postgres://postgres:postgres@localhost:5432/whatsapp_poc?sslmode=disable"
+go run ./cmd/register-phone --phone 5511999999999 --producer "Joao da Silva" --farm "Fazenda Boa Vista"
+```
+
+Fluxo executado pelo comando:
 
 1. cria o produtor
 2. cria a fazenda
 3. vincula o telefone em `farm_memberships`
+4. ativa o contexto do telefone em `phone_context_states`
 
-Exemplo:
+Se precisar fazer manualmente, o equivalente e:
 
 ```sql
 INSERT INTO producers (id, name)
