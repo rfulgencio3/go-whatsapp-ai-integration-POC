@@ -1298,3 +1298,24 @@ func TestCaptureServiceRejectsDraftAndLinksCorrectionMessage(t *testing.T) {
 		t.Fatalf("expected pending confirmation to point to new draft event, got %q", conversations.conversation.PendingConfirmationEventID)
 	}
 }
+
+func TestBuildDraftConfirmationPromptFromInterpretation(t *testing.T) {
+	t.Parallel()
+
+	occurredAt := time.Date(2026, time.April, 7, 9, 30, 0, 0, time.UTC)
+	prompt := buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
+		Category:    "finance",
+		Subcategory: "input_purchase",
+		Description: "Comprei 10 sacos de racao por 850 reais",
+		Amount:      float64Ptr(850),
+		Currency:    "BRL",
+		Quantity:    float64Ptr(10),
+		Unit:        "saco",
+		OccurredAt:  &occurredAt,
+	})
+
+	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nResponda SIM para confirmar ou NAO para corrigir."
+	if prompt != expected {
+		t.Fatalf("unexpected confirmation prompt:\n%s", prompt)
+	}
+}

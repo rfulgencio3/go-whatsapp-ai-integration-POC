@@ -1011,25 +1011,100 @@ func buildDraftConfirmationPrompt(event domain.BusinessEvent) string {
 	return buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
 		Category:    event.Category,
 		Subcategory: event.Subcategory,
+		Description: event.Description,
 		Amount:      event.Amount,
+		Currency:    event.Currency,
 		Quantity:    event.Quantity,
 		Unit:        event.Unit,
+		OccurredAt:  event.OccurredAt,
 	})
 }
 
 func buildDraftConfirmationPromptFromInterpretation(result InterpretationResult) string {
-	switch {
-	case result.Category == "finance" && result.Subcategory == "input_purchase" && result.Amount != nil && result.Quantity != nil && strings.TrimSpace(result.Unit) != "":
-		return fmt.Sprintf("Registrei compra de insumos de R$ %.2f, %.3g %s. Responda SIM para confirmar ou NAO para corrigir.", *result.Amount, *result.Quantity, result.Unit)
-	case result.Category == "finance" && result.Subcategory == "expense" && result.Amount != nil:
-		return fmt.Sprintf("Registrei despesa de R$ %.2f. Responda SIM para confirmar ou NAO para corrigir.", *result.Amount)
-	case result.Category == "finance" && result.Subcategory == "revenue" && result.Amount != nil:
-		return fmt.Sprintf("Registrei receita de R$ %.2f. Responda SIM para confirmar ou NAO para corrigir.", *result.Amount)
-	case result.Category == "reproduction" && result.Subcategory == "insemination":
-		return "Registrei um evento de inseminacao. Responda SIM para confirmar ou NAO para corrigir."
-	default:
-		return "Registrei essa informacao. Responda SIM para confirmar ou NAO para corrigir."
+	lines := []string{
+		fmt.Sprintf("Categoria: %s", humanCategoryLabel(result.Category, result.Subcategory)),
 	}
+
+	if detail := buildConfirmationDetail(result); detail != "" {
+		lines = append(lines, detail)
+	}
+	if result.Amount != nil {
+		lines = append(lines, fmt.Sprintf("Valor: %s", formatCurrency(result.Amount, result.Currency)))
+	}
+	if result.Quantity != nil {
+		lines = append(lines, fmt.Sprintf("Quantidade: %s", formatQuantity(result.Quantity, result.Unit)))
+	}
+	if occurredAt := formatOccurredAt(result.OccurredAt); occurredAt != "" {
+		lines = append(lines, fmt.Sprintf("Data: %s", occurredAt))
+	}
+	lines = append(lines, "Responda SIM para confirmar ou NAO para corrigir.")
+
+	return strings.Join(lines, "\n")
+}
+
+func humanCategoryLabel(category, subcategory string) string {
+	switch {
+	case category == "finance" && subcategory == "input_purchase":
+		return "Compra de insumos"
+	case category == "finance" && subcategory == "expense":
+		return "Despesa"
+	case category == "finance" && subcategory == "revenue":
+		return "Receita"
+	case category == "reproduction" && subcategory == "insemination":
+		return "Manejo reprodutivo"
+	case category == "operations" && subcategory == "note":
+		return "Observacao operacional"
+	default:
+		return "Registro operacional"
+	}
+}
+
+func buildConfirmationDetail(result InterpretationResult) string {
+	description := strings.TrimSpace(result.Description)
+	switch {
+	case result.Category == "finance" && result.Subcategory == "input_purchase" && description != "":
+		return fmt.Sprintf("Descricao: %s", description)
+	case result.Category == "finance" && result.Subcategory == "expense" && description != "":
+		return fmt.Sprintf("Descricao: %s", description)
+	case result.Category == "finance" && result.Subcategory == "revenue" && description != "":
+		return fmt.Sprintf("Descricao: %s", description)
+	case result.Category == "reproduction" && result.Subcategory == "insemination":
+		if description == "" {
+			return "Evento: inseminacao"
+		}
+		return fmt.Sprintf("Evento: %s", description)
+	case description != "":
+		return fmt.Sprintf("Descricao: %s", description)
+	default:
+		return ""
+	}
+}
+
+func formatCurrency(amount *float64, currency string) string {
+	if amount == nil {
+		return ""
+	}
+	if strings.TrimSpace(currency) == "" || strings.EqualFold(currency, "BRL") {
+		return fmt.Sprintf("R$ %.2f", *amount)
+	}
+	return fmt.Sprintf("%s %.2f", strings.ToUpper(strings.TrimSpace(currency)), *amount)
+}
+
+func formatQuantity(quantity *float64, unit string) string {
+	if quantity == nil {
+		return ""
+	}
+	if strings.TrimSpace(unit) == "" {
+		return fmt.Sprintf("%.3g", *quantity)
+	}
+	return fmt.Sprintf("%.3g %s", *quantity, unit)
+}
+
+func formatOccurredAt(occurredAt *time.Time) string {
+	if occurredAt == nil {
+		return ""
+	}
+	return occurredAt.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006 15:04")
 }
 
 func buildChatMessageFromIncoming(incomingMessage chat.IncomingMessage, text string) chat.Message {
