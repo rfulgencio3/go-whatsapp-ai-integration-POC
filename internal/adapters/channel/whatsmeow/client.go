@@ -235,6 +235,13 @@ func (c *Client) handleIncomingMessage(event *events.Message) {
 	}
 
 	incoming := buildIncomingMessage(event)
+	c.logger.Info("whatsmeow inbound message received", map[string]any{
+		"message_id":              incoming.MessageID,
+		"raw_sender_user":         event.Info.Sender.User,
+		"normalized_phone_number": chat.NormalizePhoneNumber(incoming.PhoneNumber),
+		"type":                    incoming.Type,
+		"has_media_attachments":   len(incoming.MediaAttachments) > 0,
+	})
 
 	c.mutex.RLock()
 	processor := c.processor

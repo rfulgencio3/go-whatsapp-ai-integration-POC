@@ -573,6 +573,9 @@ func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber stri
 
 	normalized := domain.NormalizePhoneNumber(phoneNumber)
 	if normalized == "" {
+		s.logger.Info("agro membership resolution skipped for empty phone", map[string]any{
+			"raw_phone_number": phoneNumber,
+		})
 		return domain.FarmMembership{}, membershipResolutionUnavailable, nil
 	}
 
@@ -580,6 +583,11 @@ func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber stri
 	if err != nil {
 		return domain.FarmMembership{}, membershipResolutionUnavailable, err
 	}
+	s.logger.Info("agro membership lookup completed", map[string]any{
+		"raw_phone_number":        phoneNumber,
+		"normalized_phone_number": normalized,
+		"matches":                 len(memberships),
+	})
 	if len(memberships) > 1 && s.phoneContexts != nil {
 		state, found, err := s.phoneContexts.GetByPhoneNumber(ctx, normalized)
 		if err != nil {
@@ -597,6 +605,11 @@ func (s *CaptureService) resolveMembership(ctx context.Context, phoneNumber stri
 	case 0:
 		return domain.FarmMembership{}, membershipResolutionNotFound, nil
 	case 1:
+		s.logger.Info("agro membership resolved", map[string]any{
+			"normalized_phone_number": normalized,
+			"farm_id":                 memberships[0].FarmID,
+			"farm_name":               memberships[0].FarmName,
+		})
 		return memberships[0], membershipResolutionResolved, nil
 	default:
 		s.logger.Info("agro context is ambiguous for inbound phone", map[string]any{
