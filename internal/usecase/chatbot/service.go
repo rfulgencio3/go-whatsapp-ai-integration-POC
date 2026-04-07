@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/observability"
 )
 
 type ProcessResult struct {
@@ -20,6 +21,7 @@ type ProcessResult struct {
 }
 
 type Service struct {
+	logger                 *observability.Logger
 	allowedPhoneNumber     string
 	replyGenerator         ReplyGenerator
 	replyOverrideResolver  ReplyOverrideResolver
@@ -54,6 +56,7 @@ func NewService(
 	}
 
 	return &Service{
+		logger:                 observability.NewLogger(),
 		allowedPhoneNumber:     chat.NormalizePhoneNumber(allowedPhoneNumber),
 		replyGenerator:         replyGenerator,
 		replyOverrideResolver:  replyOverrideResolver,
@@ -120,20 +123,41 @@ func (s *Service) ProcessIncomingMessage(ctx context.Context, message chat.Incom
 }
 
 func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.IncomingMessage) (ProcessResult, error) {
+	s.logger.Info("chatbot process started", map[string]any{
+		"phone_number": chat.NormalizePhoneNumber(incomingMessage.PhoneNumber),
+		"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+		"type":         incomingMessage.Type,
+		"provider":     strings.TrimSpace(incomingMessage.Provider),
+	})
+
 	preparedMessage, err := s.incomingPreprocessor.Prepare(ctx, incomingMessage)
 	if err != nil {
 		if errors.Is(err, chat.ErrUnsupportedMessageType) {
+			s.logger.Info("chatbot unsupported inbound after preprocessing", map[string]any{
+				"phone_number": chat.NormalizePhoneNumber(incomingMessage.PhoneNumber),
+				"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+			})
 			return s.sendUnsupportedReply(ctx, incomingMessage)
 		}
 		return ProcessResult{}, err
 	}
 	if strings.TrimSpace(preparedMessage.Text) == "" {
+		s.logger.Info("chatbot empty prepared message, sending unsupported reply", map[string]any{
+			"phone_number": chat.NormalizePhoneNumber(preparedMessage.PhoneNumber),
+			"message_id":   strings.TrimSpace(preparedMessage.MessageID),
+			"type":         preparedMessage.Type,
+		})
 		return s.sendUnsupportedReply(ctx, preparedMessage)
 	}
 
 	if override, ok, err := s.resolveOverrideReply(ctx, preparedMessage); err != nil {
 		return ProcessResult{}, err
 	} else if ok {
+		s.logger.Info("chatbot reply override resolved", map[string]any{
+			"phone_number": chat.NormalizePhoneNumber(preparedMessage.PhoneNumber),
+			"message_id":   strings.TrimSpace(preparedMessage.MessageID),
+			"reply_kind":   override.Kind,
+		})
 		return s.sendOverrideReply(ctx, preparedMessage, override)
 	}
 
@@ -145,10 +169,19 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
 		return ProcessResult{}, err
 	}
+	s.logger.Info("chatbot reply sent", map[string]any{
+		"phone_number": normalizedPhoneNumber,
+		"message_id":   strings.TrimSpace(preparedMessage.MessageID),
+		"reply_kind":   ReplyKindText,
+	})
 
 	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
 		return ProcessResult{}, err
 	}
+	s.logger.Info("chatbot conversation persisted", map[string]any{
+		"phone_number": normalizedPhoneNumber,
+		"message_id":   strings.TrimSpace(preparedMessage.MessageID),
+	})
 
 	return ProcessResult{
 		PhoneNumber:        normalizedPhoneNumber,
@@ -171,6 +204,11 @@ func (s *Service) buildReplyArtifacts(ctx context.Context, incomingMessage chat.
 	if err != nil {
 		return "", chat.Message{}, chat.Message{}, err
 	}
+	s.logger.Info("chatbot history loaded", map[string]any{
+		"phone_number":   normalizedPhoneNumber,
+		"history_length": len(history),
+		"message_id":     strings.TrimSpace(incomingMessage.MessageID),
+	})
 
 	userChatMessage := buildUserChatMessage(incomingMessage, normalizedMessage)
 	historyForReply := append(append([]chat.Message(nil), history...), userChatMessage)
@@ -178,6 +216,11 @@ func (s *Service) buildReplyArtifacts(ctx context.Context, incomingMessage chat.
 	reply, err := s.replyGenerator.GenerateReply(ctx, historyForReply)
 	if err != nil {
 		if isRateLimitedReplyError(err) {
+			s.logger.Info("chatbot using rate limit fallback reply", map[string]any{
+				"phone_number": normalizedPhoneNumber,
+				"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+				"error":        err.Error(),
+			})
 			reply = rateLimitedFallbackReply
 		} else {
 			return "", chat.Message{}, chat.Message{}, err
@@ -243,9 +286,19 @@ func (s *Service) sendOverrideReply(ctx context.Context, incomingMessage chat.In
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
 		return ProcessResult{}, err
 	}
+	s.logger.Info("chatbot override reply sent", map[string]any{
+		"phone_number": normalizedPhoneNumber,
+		"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+		"reply_kind":   override.Kind,
+	})
 	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
 		return ProcessResult{}, err
 	}
+	s.logger.Info("chatbot override conversation persisted", map[string]any{
+		"phone_number": normalizedPhoneNumber,
+		"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+		"reply_kind":   override.Kind,
+	})
 
 	if override.Kind == "" {
 		override.Kind = ReplyKindText
