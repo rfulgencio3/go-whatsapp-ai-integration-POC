@@ -390,3 +390,51 @@ func TestProcessIncomingMessageUsesReplyOverride(t *testing.T) {
 		t.Fatalf("expected reply kind confirmation, got %q", result.AssistantReplyKind)
 	}
 }
+
+func TestProcessIncomingMessageFallsBackWhenGeminiRateLimited(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{}
+	deduplicator := newStubMessageDeduplicator()
+	service := NewService("", stubReplyGenerator{err: errors.New("gemini returned status 429: RESOURCE_EXHAUSTED quota exceeded")}, nil, sender, nil, repository, archive, deduplicator)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "wamid.rate-limit",
+		PhoneNumber: "5511999999999",
+		Text:        "ola",
+		Type:        chat.MessageTypeText,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if sender.lastBody != rateLimitedFallbackReply {
+		t.Fatalf("expected rate limit fallback reply, got %q", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != rateLimitedFallbackReply {
+		t.Fatalf("expected result assistant message to use fallback, got %q", result.AssistantMessage.Text)
+	}
+	if len(repository.store["5511999999999"]) != 2 {
+		t.Fatalf("expected fallback flow to persist history")
+	}
+	if len(archive.recorded) != 2 {
+		t.Fatalf("expected fallback flow to be archived")
+	}
+}
+
+func TestProcessIncomingMessageReturnsErrorForNonRateLimitedGeneratorFailure(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{}
+	deduplicator := newStubMessageDeduplicator()
+	service := NewService("", stubReplyGenerator{err: errors.New("gemini returned status 500")}, nil, sender, nil, repository, archive, deduplicator)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "wamid.failure",
+		PhoneNumber: "5511999999999",
+		Text:        "ola",
+		Type:        chat.MessageTypeText,
+	})
+	if err == nil {
+		t.Fatalf("expected non-rate-limited generator failure")
+	}
+}

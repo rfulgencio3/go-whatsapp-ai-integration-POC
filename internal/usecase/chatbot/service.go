@@ -34,6 +34,7 @@ type noopMessageDeduplicator struct{}
 type noopIncomingMessagePreprocessor struct{}
 
 const unsupportedInboundReply = "No momento consigo processar mensagens de texto e audio no WhatsApp."
+const rateLimitedFallbackReply = "Recebi sua mensagem. No momento estou com limite temporario de processamento. Tente novamente em instantes."
 
 func NewService(
 	allowedPhoneNumber string,
@@ -176,7 +177,11 @@ func (s *Service) buildReplyArtifacts(ctx context.Context, incomingMessage chat.
 
 	reply, err := s.replyGenerator.GenerateReply(ctx, historyForReply)
 	if err != nil {
-		return "", chat.Message{}, chat.Message{}, err
+		if isRateLimitedReplyError(err) {
+			reply = rateLimitedFallbackReply
+		} else {
+			return "", chat.Message{}, chat.Message{}, err
+		}
 	}
 
 	assistantChatMessage := chat.Message{
@@ -341,4 +346,15 @@ func unsupportedInboundSummary(incomingMessage chat.IncomingMessage) string {
 		return "unsupported inbound message"
 	}
 	return fmt.Sprintf("unsupported inbound message of type %s", incomingMessage.Type)
+}
+
+func isRateLimitedReplyError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "status 429") ||
+		strings.Contains(message, "resource_exhausted") ||
+		strings.Contains(message, "quota exceeded")
 }
