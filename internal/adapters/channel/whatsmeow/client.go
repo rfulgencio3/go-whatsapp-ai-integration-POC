@@ -2,6 +2,7 @@ package whatsmeow
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -56,9 +57,19 @@ func New(cfg config.Config, logger *observability.Logger, processor chatbot.Mess
 	defer cancel()
 
 	dbLog := waLog.Stdout("WhatsmeowDB", "INFO", false)
-	container, err := sqlstore.New(ctx, "postgres", cfg.WhatsmeowStoreDSN, dbLog)
+	database, err := sql.Open("pgx", cfg.WhatsmeowStoreDSN)
 	if err != nil {
-		return nil, fmt.Errorf("initialize whatsmeow sql store: %w", err)
+		return nil, fmt.Errorf("open whatsmeow sql database: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = database.Close()
+		}
+	}()
+
+	container := sqlstore.NewWithDB(database, "postgres", dbLog)
+	if err = container.Upgrade(ctx); err != nil {
+		return nil, fmt.Errorf("initialize whatsmeow sql store: failed to upgrade database: %w", err)
 	}
 
 	deviceStore, err := container.GetFirstDevice(ctx)
