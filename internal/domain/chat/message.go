@@ -1,9 +1,9 @@
 package chat
 
 import (
-	"strings"
 	"time"
-	"unicode"
+
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/common"
 )
 
 type MessageRole string
@@ -54,18 +54,5 @@ type MediaAttachment struct {
 }
 
 func NormalizePhoneNumber(value string) string {
-	digits := strings.Map(func(r rune) rune {
-		if unicode.IsDigit(r) {
-			return r
-		}
-		return -1
-	}, strings.TrimSpace(value))
-
-	digits = strings.TrimPrefix(digits, "00")
-	switch len(digits) {
-	case 10, 11:
-		return "55" + digits
-	default:
-		return digits
-	}
+	return common.NormalizePhoneNumber(value)
 }
