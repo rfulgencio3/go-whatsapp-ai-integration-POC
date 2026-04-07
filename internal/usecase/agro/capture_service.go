@@ -93,6 +93,7 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	if s.downstream == nil {
 		return chatbot.ProcessResult{}, nil
 	}
+
 	handled, result, err := s.handleOnboarding(ctx, message)
 	if err != nil {
 		return chatbot.ProcessResult{}, err
@@ -100,6 +101,7 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	if handled {
 		return result, nil
 	}
+
 	handled, result, err = s.handleContextSwitchRequest(ctx, message)
 	if err != nil {
 		return chatbot.ProcessResult{}, err
@@ -112,6 +114,7 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	if err != nil {
 		return chatbot.ProcessResult{}, err
 	}
+
 	resolved := resolution == membershipResolutionResolved
 	if resolved {
 		handled, result, err := s.handleConfirmationMessage(ctx, membership, message)
@@ -122,6 +125,7 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 			return result, nil
 		}
 	}
+
 	if !resolved {
 		handled, result, err := s.handleUnresolvedMembership(ctx, resolution, message)
 		if err != nil {
@@ -147,57 +151,4 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 	}
 
 	return result, nil
-}
-
-type confirmationDecision string
-
-const (
-	confirmationAccepted confirmationDecision = "accepted"
-	confirmationRejected confirmationDecision = "rejected"
-)
-
-func classifyConfirmationDecision(text string) confirmationDecision {
-	normalized := normalizeText(text)
-	switch normalized {
-	case "sim", "s", "ok", "confirmar", "confirmado", "pode confirmar", "isso":
-		return confirmationAccepted
-	case "nao", "não", "n", "cancelar", "corrigir", "errado":
-		return confirmationRejected
-	default:
-		return ""
-	}
-}
-
-func legacyBuildUnregisteredNumberReply() string {
-	return "Seu numero ainda nao esta vinculado a uma fazenda. Peça o cadastro do seu telefone para continuar."
-}
-
-func parseContextSelection(text string) int {
-	normalized := strings.TrimSpace(text)
-	if normalized == "" {
-		return 0
-	}
-	if len(normalized) != 1 || normalized[0] < '1' || normalized[0] > '9' {
-		return 0
-	}
-
-	return int(normalized[0] - '0')
-}
-
-func isContextSwitchCommand(text string) bool {
-	switch normalizeText(text) {
-	case "trocar fazenda", "mudar fazenda", "alternar fazenda", "selecionar fazenda", "trocar contexto", "mudar contexto":
-		return true
-	default:
-		return false
-	}
-}
-
-func isOnboardingStartCommand(text string) bool {
-	switch normalizeText(text) {
-	case "cadastrar", "cadastro", "quero cadastrar", "iniciar cadastro", "me cadastrar":
-		return true
-	default:
-		return false
-	}
 }
