@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	transcriptionhttpapi "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/adapters/transcription/httpapi"
+	"github.com/skip2/go-qrcode"
 	wm "go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -185,6 +186,7 @@ func (c *Client) consumeQRChannel(ctx context.Context, qrChan <-chan wm.QRChanne
 				continue
 			}
 
+			c.renderQRCodeToTerminal(item.Code)
 			c.logger.Info("whatsmeow qr code generated", map[string]any{
 				"qr_code": item.Code,
 			})
@@ -388,4 +390,46 @@ func fallbackAudioFileName(attachment chat.MediaAttachment) string {
 
 func eventMessageID(message chat.IncomingMessage) string {
 	return strings.TrimSpace(message.MessageID)
+}
+
+func (c *Client) renderQRCodeToTerminal(content string) {
+	code, err := qrcode.New(content, qrcode.Medium)
+	if err != nil {
+		c.logger.Error("whatsmeow qr render failed", map[string]any{"error": err.Error()})
+		return
+	}
+
+	bitmap := code.Bitmap()
+	if len(bitmap) == 0 {
+		return
+	}
+
+	const (
+		white = "  "
+		black = "██"
+	)
+
+	fmt.Println()
+	fmt.Println("WhatsApp QR code:")
+	for range 2 {
+		fmt.Print(strings.Repeat(white, len(bitmap)+4))
+		fmt.Println()
+	}
+	for _, row := range bitmap {
+		fmt.Print(strings.Repeat(white, 2))
+		for _, cell := range row {
+			if cell {
+				fmt.Print(black)
+			} else {
+				fmt.Print(white)
+			}
+		}
+		fmt.Print(strings.Repeat(white, 2))
+		fmt.Println()
+	}
+	for range 2 {
+		fmt.Print(strings.Repeat(white, len(bitmap)+4))
+		fmt.Println()
+	}
+	fmt.Println()
 }
