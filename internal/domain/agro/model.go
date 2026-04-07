@@ -3,6 +3,7 @@ package agro
 import (
 	"strings"
 	"time"
+	"unicode"
 )
 
 type FarmRole string
@@ -222,7 +223,18 @@ type AssistantMessage struct {
 }
 
 func NormalizePhoneNumber(value string) string {
-	value = strings.TrimSpace(value)
-	replacer := strings.NewReplacer(" ", "", "+", "", "-", "", "(", "", ")", "")
-	return replacer.Replace(value)
+	digits := strings.Map(func(r rune) rune {
+		if unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(value))
+
+	digits = strings.TrimPrefix(digits, "00")
+	switch len(digits) {
+	case 10, 11:
+		return "55" + digits
+	default:
+		return digits
+	}
 }
