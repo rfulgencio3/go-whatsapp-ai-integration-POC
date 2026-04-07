@@ -101,14 +101,16 @@ func NewAssistantMessageRepository(database *sql.DB) *AssistantMessageRepository
 }
 
 func (r *FarmMembershipRepository) FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]agro.FarmMembership, error) {
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
 	rows, err := r.database.QueryContext(
 		ctx,
 		`SELECT fm.id, fm.farm_id, f.name, fm.person_name, fm.phone_number, fm.role, fm.is_primary, fm.status, fm.verified_at, fm.created_at, fm.updated_at
 		FROM farm_memberships fm
 		INNER JOIN farms f ON f.id = fm.farm_id
-		WHERE fm.phone_number = $1 AND fm.status = 'active'
+		WHERE fm.phone_number IN ($1, $2) AND fm.status = 'active'
 		ORDER BY fm.is_primary DESC, fm.created_at ASC`,
-		agro.NormalizePhoneNumber(phoneNumber),
+		primaryPhone,
+		secondaryPhone,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query farm memberships by phone: %w", err)
@@ -245,13 +247,17 @@ func (r *PhoneContextStateRepository) GetByPhoneNumber(ctx context.Context, phon
 	var state agro.PhoneContextState
 	var activeFarmID sql.NullString
 	var pendingOptionsRaw []byte
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
 
 	err := r.database.QueryRowContext(
 		ctx,
 		`SELECT phone_number, active_farm_id, pending_options, updated_at
 		FROM phone_context_states
-		WHERE phone_number = $1`,
-		agro.NormalizePhoneNumber(phoneNumber),
+		WHERE phone_number IN ($1, $2)
+		ORDER BY CASE WHEN phone_number = $1 THEN 0 ELSE 1 END
+		LIMIT 1`,
+		primaryPhone,
+		secondaryPhone,
 	).Scan(
 		&state.PhoneNumber,
 		&activeFarmID,
@@ -315,12 +321,16 @@ func (r *PhoneContextStateRepository) Upsert(ctx context.Context, state *agro.Ph
 
 func (r *OnboardingStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.OnboardingState, bool, error) {
 	var state agro.OnboardingState
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
 	err := r.database.QueryRowContext(
 		ctx,
 		`SELECT phone_number, step, producer_name, updated_at
 		FROM onboarding_states
-		WHERE phone_number = $1`,
-		agro.NormalizePhoneNumber(phoneNumber),
+		WHERE phone_number IN ($1, $2)
+		ORDER BY CASE WHEN phone_number = $1 THEN 0 ELSE 1 END
+		LIMIT 1`,
+		primaryPhone,
+		secondaryPhone,
 	).Scan(
 		&state.PhoneNumber,
 		&state.Step,
@@ -366,10 +376,12 @@ func (r *OnboardingStateRepository) Upsert(ctx context.Context, state *agro.Onbo
 }
 
 func (r *OnboardingStateRepository) DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error {
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
 	_, err := r.database.ExecContext(
 		ctx,
-		`DELETE FROM onboarding_states WHERE phone_number = $1`,
-		agro.NormalizePhoneNumber(phoneNumber),
+		`DELETE FROM onboarding_states WHERE phone_number IN ($1, $2)`,
+		primaryPhone,
+		secondaryPhone,
 	)
 	if err != nil {
 		return fmt.Errorf("delete onboarding state: %w", err)
@@ -420,16 +432,18 @@ func (r *ConversationRepository) GetOrCreateOpen(ctx context.Context, farmID, ch
 	var conversation agro.Conversation
 	var pendingConfirmationEventID sql.NullString
 	var pendingCorrectionEventID sql.NullString
+	primaryPhone, secondaryPhone := phoneLookupVariants(senderPhoneNumber)
 	row := r.database.QueryRowContext(
 		ctx,
 		`SELECT id, farm_id, channel, sender_phone_number, pending_confirmation_event_id, pending_correction_event_id, status, last_message_at, created_at, updated_at
 		FROM conversations
-		WHERE farm_id = $1 AND channel = $2 AND sender_phone_number = $3 AND status = 'open'
-		ORDER BY updated_at DESC
+		WHERE farm_id = $1 AND channel = $2 AND sender_phone_number IN ($3, $4) AND status = 'open'
+		ORDER BY CASE WHEN sender_phone_number = $3 THEN 0 ELSE 1 END, updated_at DESC
 		LIMIT 1`,
 		farmID,
 		channel,
-		agro.NormalizePhoneNumber(senderPhoneNumber),
+		primaryPhone,
+		secondaryPhone,
 	)
 	err := row.Scan(
 		&conversation.ID,
@@ -925,4 +939,16 @@ func nullFloat64(value *float64) any {
 	}
 
 	return *value
+}
+
+func phoneLookupVariants(phoneNumber string) (string, string) {
+	candidates := agro.PhoneNumberLookupCandidates(phoneNumber)
+	switch len(candidates) {
+	case 0:
+		return "", ""
+	case 1:
+		return candidates[0], candidates[0]
+	default:
+		return candidates[0], candidates[1]
+	}
 }

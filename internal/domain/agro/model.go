@@ -238,3 +238,34 @@ func NormalizePhoneNumber(value string) string {
 		return digits
 	}
 }
+
+func PhoneNumberLookupCandidates(value string) []string {
+	normalized := NormalizePhoneNumber(value)
+	if normalized == "" {
+		return nil
+	}
+
+	candidates := []string{normalized}
+	if alternate := alternateBrazilianMobileNumber(normalized); alternate != "" && alternate != normalized {
+		candidates = append(candidates, alternate)
+	}
+
+	return candidates
+}
+
+func alternateBrazilianMobileNumber(value string) string {
+	if !strings.HasPrefix(value, "55") {
+		return ""
+	}
+
+	switch len(value) {
+	case 13:
+		if value[4] == '9' {
+			return value[:4] + value[5:]
+		}
+	case 12:
+		return value[:4] + "9" + value[4:]
+	}
+
+	return ""
+}
