@@ -11,6 +11,7 @@ import (
 
 type ReplyFormatter interface {
 	BuildConfirmedReply(event domain.BusinessEvent) string
+	BuildHelpReply(registered bool) string
 	BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string
 	BuildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string
 	BuildCorrelatedExpenseDeclinedReply() string
@@ -37,6 +38,7 @@ type WorkflowRouter interface {
 	ParseContextSelection(text string) int
 	IsContextSwitchCommand(text string) bool
 	IsOnboardingStartCommand(text string) bool
+	IsHelpCommand(text string) bool
 	IsMilkWithdrawalQuery(text string) bool
 	IsRecentTreatmentsQuery(text string) bool
 	IsMedicineExpenseMonthQuery(text string) bool
@@ -70,6 +72,10 @@ type defaultReplyFormatter struct{}
 
 func (defaultReplyFormatter) BuildConfirmedReply(event domain.BusinessEvent) string {
 	return buildConfirmedReply(event)
+}
+
+func (defaultReplyFormatter) BuildHelpReply(registered bool) string {
+	return buildHelpReply(registered)
 }
 
 func (defaultReplyFormatter) BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {
@@ -164,6 +170,10 @@ func (defaultWorkflowRouter) IsContextSwitchCommand(text string) bool {
 
 func (defaultWorkflowRouter) IsOnboardingStartCommand(text string) bool {
 	return isOnboardingStartCommand(text)
+}
+
+func (defaultWorkflowRouter) IsHelpCommand(text string) bool {
+	return isHelpCommand(text)
 }
 
 func (defaultWorkflowRouter) IsMilkWithdrawalQuery(text string) bool {

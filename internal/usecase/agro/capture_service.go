@@ -127,7 +127,15 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		return chatbot.ProcessResult{}, nil
 	}
 
-	handled, result, err := s.handleOnboarding(ctx, message)
+	handled, result, err := s.handleHelpRequest(ctx, message)
+	if err != nil {
+		return chatbot.ProcessResult{}, err
+	}
+	if handled {
+		return result, nil
+	}
+
+	handled, result, err = s.handleOnboarding(ctx, message)
 	if err != nil {
 		return chatbot.ProcessResult{}, err
 	}

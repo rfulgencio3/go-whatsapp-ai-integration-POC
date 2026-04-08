@@ -88,13 +88,13 @@ func (s *CaptureService) startOnboarding(ctx context.Context, phoneNumber string
 		return "", "", err
 	}
 
-	return "Vamos fazer seu cadastro inicial. Qual o nome do produtor ou responsavel?", domain.OnboardingStepAwaitingProducerName, nil
+	return "Vamos fazer seu cadastro inicial. Qual e o nome do produtor ou responsavel?", domain.OnboardingStepAwaitingProducerName, nil
 }
 
 func (s *CaptureService) completeOnboardingProducerStep(ctx context.Context, state domain.OnboardingState, text string) (string, domain.OnboardingStep, error) {
 	producerName := strings.TrimSpace(text)
 	if producerName == "" {
-		return "Envie o nome do produtor ou responsavel para continuar o cadastro.", domain.OnboardingStepAwaitingProducerName, nil
+		return "Para continuar, me envie o nome do produtor ou responsavel.", domain.OnboardingStepAwaitingProducerName, nil
 	}
 
 	state.Step = domain.OnboardingStepAwaitingFarmName
@@ -104,13 +104,13 @@ func (s *CaptureService) completeOnboardingProducerStep(ctx context.Context, sta
 		return "", "", err
 	}
 
-	return "Agora envie o nome da fazenda ou negocio.", domain.OnboardingStepAwaitingFarmName, nil
+	return "Perfeito. Agora me envie o nome da fazenda ou negocio.", domain.OnboardingStepAwaitingFarmName, nil
 }
 
 func (s *CaptureService) completeOnboardingFarmStep(ctx context.Context, state domain.OnboardingState, text string) (string, domain.OnboardingStep, error) {
 	farmName := strings.TrimSpace(text)
 	if farmName == "" {
-		return "Envie o nome da fazenda ou negocio para concluir o cadastro.", domain.OnboardingStepAwaitingFarmName, nil
+		return "Para concluir o cadastro, me envie o nome da fazenda ou negocio.", domain.OnboardingStepAwaitingFarmName, nil
 	}
 	if s.farmRegistrations == nil {
 		return "", "", nil
@@ -126,7 +126,7 @@ func (s *CaptureService) completeOnboardingFarmStep(ctx context.Context, state d
 		}
 	}
 
-	return fmt.Sprintf("Cadastro concluido. Seu numero foi vinculado a %s. Agora voce ja pode enviar registros.", fallbackFarmName(domain.PhoneContextOption{FarmName: membership.FarmName}, 1)), "", nil
+	return fmt.Sprintf("Pronto. Seu numero foi vinculado a %s. Agora voce ja pode me enviar registros e consultas.", fallbackFarmName(domain.PhoneContextOption{FarmName: membership.FarmName}, 1)), "", nil
 }
 
 func (s *CaptureService) persistOnboardingInteraction(ctx context.Context, phoneNumber string, step domain.OnboardingStep, incomingMessage chat.IncomingMessage, assistantMessage chat.Message, createdAt time.Time) error {

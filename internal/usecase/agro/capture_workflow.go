@@ -51,6 +51,15 @@ func isOnboardingStartCommand(text string) bool {
 	}
 }
 
+func isHelpCommand(text string) bool {
+	switch normalizeText(text) {
+	case "ajuda", "help", "socorro", "o que posso registrar", "o que eu posso registrar", "exemplos", "quais consultas posso fazer", "como funciona":
+		return true
+	default:
+		return false
+	}
+}
+
 func isMilkWithdrawalQuery(text string) bool {
 	normalized := normalizeText(text)
 	switch {

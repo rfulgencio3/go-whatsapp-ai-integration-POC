@@ -11,30 +11,49 @@ import (
 func buildConfirmedReply(event domain.BusinessEvent) string {
 	switch {
 	case event.Category == "finance" && event.Subcategory == "input_purchase" && event.Amount != nil && event.Quantity != nil && strings.TrimSpace(event.Unit) != "":
-		return fmt.Sprintf("Registro confirmado: compra de insumos de R$ %.2f, %.3g %s.", *event.Amount, *event.Quantity, event.Unit)
+		return fmt.Sprintf("Perfeito. Registrei a compra de insumos em %s, com %.3g %s.", formatCurrency(event.Amount, event.Currency), *event.Quantity, event.Unit)
 	case event.Category == "finance" && event.Subcategory == "expense" && event.Amount != nil:
-		return fmt.Sprintf("Registro confirmado: despesa de R$ %.2f.", *event.Amount)
+		return fmt.Sprintf("Perfeito. Registrei a despesa em %s.", formatCurrency(event.Amount, event.Currency))
 	case event.Category == "finance" && event.Subcategory == "revenue" && event.Amount != nil:
-		return fmt.Sprintf("Registro confirmado: receita de R$ %.2f.", *event.Amount)
+		return fmt.Sprintf("Perfeito. Registrei a receita em %s.", formatCurrency(event.Amount, event.Currency))
 	case event.Category == "reproduction" && event.Subcategory == "insemination":
-		return "Registro confirmado: evento de inseminacao salvo."
+		return "Perfeito. Registrei o evento de inseminacao."
 	default:
-		return "Registro confirmado com sucesso."
+		return "Perfeito. Registrei essa informacao."
 	}
 }
 
+func buildHelpReply(registered bool) string {
+	lines := []string{
+		"Posso te ajudar com registros e consultas objetivas da fazenda.",
+		"Exemplos de registros:",
+		"- Comprei 10 sacos de racao por 850 reais",
+		"- A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+		"Exemplos de consultas:",
+		"- Quais vacas nao podem tirar leite?",
+		"- Quais foram os ultimos tratamentos?",
+		"- Quanto gastei com medicamento esse mes?",
+		"- Quanto gastei com veterinario esse mes?",
+		"- Quais foram as ultimas compras?",
+	}
+	if !registered {
+		lines = append(lines, "Se seu numero ainda nao estiver vinculado, responda CADASTRAR para iniciar o cadastro.")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func buildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {
-	return buildConfirmedReply(event) + "\nVoce deseja lancar tambem os gastos com medicamento, consulta veterinaria e exames? Responda SIM ou NAO."
+	return buildConfirmedReply(event) + "\nDeseja lancar tambem os gastos com medicamento, consulta veterinaria e exames? Responda SIM ou NAO."
 }
 
 func buildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string {
 	switch state.Step {
 	case domain.CorrelatedExpenseStepAwaitingMedicineAmount:
-		return "Qual o valor gasto com medicamento? Se nao houve, responda 0."
+		return "Certo. Qual foi o valor gasto com medicamento? Se nao houve, responda 0."
 	case domain.CorrelatedExpenseStepAwaitingVetAmount:
-		return "Qual o valor da consulta veterinaria? Se nao houve, responda 0."
+		return "Entendi. Qual foi o valor da consulta veterinaria? Se nao houve, responda 0."
 	case domain.CorrelatedExpenseStepAwaitingExamAmount:
-		return "Qual o valor de exames? Se nao houve, responda 0."
+		return "Perfeito. Qual foi o valor de exames? Se nao houve, responda 0."
 	default:
 		return "Deseja lancar os gastos relacionados? Responda SIM ou NAO."
 	}
@@ -63,7 +82,7 @@ func buildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) st
 
 func buildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string {
 	if len(items) == 0 {
-		return "Nenhuma vaca com restricao de leite ativa no momento."
+		return "No momento, nao encontrei vacas com restricao de leite ativa."
 	}
 
 	lines := []string{"Vacas com restricao de leite ativa:"}
@@ -83,7 +102,7 @@ func buildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, referenc
 
 func buildRecentHealthTreatmentsReply(items []domain.HealthTreatmentSummary, reference time.Time) string {
 	if len(items) == 0 {
-		return "Nenhum tratamento de saude registrado recentemente."
+		return "Nao encontrei tratamentos de saude registrados recentemente."
 	}
 
 	lines := []string{"Ultimos tratamentos de saude:"}
@@ -116,7 +135,7 @@ func buildVetExpenseMonthReply(amount float64, reference time.Time) string {
 
 func buildRecentInputPurchasesReply(items []domain.InputPurchaseSummary, reference time.Time) string {
 	if len(items) == 0 {
-		return "Nenhuma compra de insumos registrada recentemente."
+		return "Nao encontrei compras de insumos registradas recentemente."
 	}
 
 	lines := []string{"Ultimas compras de insumos:"}
@@ -141,24 +160,24 @@ func buildRecentInputPurchasesReply(items []domain.InputPurchaseSummary, referen
 }
 
 func buildRejectedReply() string {
-	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
+	return "Certo. Nao vou considerar esse registro. Me envie a correcao em uma unica mensagem."
 }
 
 func buildUnregisteredNumberReply() string {
-	return "Seu numero ainda nao esta vinculado a uma fazenda. Peça o cadastro do seu telefone para continuar."
+	return "Ainda nao encontrei seu numero vinculado a uma fazenda. Se quiser, responda CADASTRAR para iniciar o cadastro."
 }
 
 func buildAmbiguousContextReply() string {
-	return "Seu numero esta vinculado a mais de uma fazenda. Ajuste o cadastro antes de continuar."
+	return "Seu numero esta vinculado a mais de uma fazenda. Me envie o numero da fazenda que deseja usar."
 }
 
 func buildSingleContextReply(farmName string) string {
-	return fmt.Sprintf("Seu numero ja esta vinculado a %s.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
+	return fmt.Sprintf("Certo. Seu numero ja esta vinculado a %s.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
 }
 
 func buildAmbiguousContextSelectionReply(options []domain.PhoneContextOption) string {
 	var builder strings.Builder
-	builder.WriteString("Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n")
+	builder.WriteString("Seu numero esta vinculado a mais de uma fazenda. Me responda com o numero da fazenda:\n")
 	for index, option := range options {
 		builder.WriteString(fmt.Sprintf("%d. %s", index+1, fallbackFarmName(option, index+1)))
 		if index < len(options)-1 {
@@ -170,23 +189,23 @@ func buildAmbiguousContextSelectionReply(options []domain.PhoneContextOption) st
 }
 
 func buildSelectedContextReply(farmName string) string {
-	return fmt.Sprintf("Contexto definido para %s. Envie a informacao novamente.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
+	return fmt.Sprintf("Pronto. Vou usar o contexto de %s. Pode enviar a informacao novamente.", fallbackFarmName(domain.PhoneContextOption{FarmName: farmName}, 1))
 }
 
 func buildAlreadyRegisteredReply() string {
-	return "Seu numero ja esta cadastrado. Pode enviar seus registros normalmente."
+	return "Seu numero ja esta cadastrado. Pode me enviar registros quando quiser."
 }
 
 func buildHealthTreatmentQuestion(state domain.HealthTreatmentState) string {
 	switch state.Step {
 	case domain.HealthTreatmentStepAwaitingDiagnosisDate:
-		return "Qual a data do diagnostico?"
+		return "Certo. Qual foi a data do diagnostico?"
 	case domain.HealthTreatmentStepAwaitingMedicine:
-		return "Qual o medicamento?"
+		return "Perfeito. Qual foi o medicamento aplicado?"
 	case domain.HealthTreatmentStepAwaitingTreatmentDays:
-		return "Quantos dias de tratamento?"
+		return "Entendi. Por quantos dias sera o tratamento?"
 	default:
-		return "Envie as informacoes do tratamento."
+		return "Pode me enviar as informacoes do tratamento."
 	}
 }
 
@@ -229,7 +248,7 @@ func buildDraftConfirmationPromptFromInterpretation(result InterpretationResult)
 	if occurredAt := formatOccurredAt(result.OccurredAt); occurredAt != "" {
 		lines = append(lines, fmt.Sprintf("Data: %s", occurredAt))
 	}
-	lines = append(lines, "Responda SIM para confirmar ou NAO para corrigir.")
+	lines = append(lines, "Se estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO.")
 
 	return strings.Join(lines, "\n")
 }

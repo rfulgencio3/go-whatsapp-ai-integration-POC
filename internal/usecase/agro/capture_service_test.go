@@ -696,6 +696,57 @@ func TestCaptureServiceRepliesWhenPhoneNumberIsNotRegistered(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceRepliesToHelpWhenPhoneNumberIsNotRegistered(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-help-1",
+		PhoneNumber: "5511999999999",
+		Text:        "ajuda",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one help reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Posso te ajudar com registros e consultas objetivas") {
+		t.Fatalf("unexpected help reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "responda CADASTRAR") {
+		t.Fatalf("expected help reply to mention cadastro for unregistered number")
+	}
+}
+
 func TestCaptureServiceStartsOnboardingForUnregisteredPhoneNumber(t *testing.T) {
 	t.Parallel()
 
@@ -739,7 +790,7 @@ func TestCaptureServiceStartsOnboardingForUnregisteredPhoneNumber(t *testing.T) 
 	if processor.calls != 0 {
 		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
 	}
-	if got := result.AssistantMessage.Text; got != "Vamos fazer seu cadastro inicial. Qual o nome do produtor ou responsavel?" {
+	if got := result.AssistantMessage.Text; got != "Vamos fazer seu cadastro inicial. Qual e o nome do produtor ou responsavel?" {
 		t.Fatalf("expected onboarding start reply, got %q", got)
 	}
 	state, found, err := onboardingStates.GetByPhoneNumber(context.Background(), "5511999999999")
@@ -810,7 +861,7 @@ func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("producer step ProcessIncomingMessage() error = %v", err)
 	}
-	if got := producerStep.AssistantMessage.Text; got != "Agora envie o nome da fazenda ou negocio." {
+	if got := producerStep.AssistantMessage.Text; got != "Perfeito. Agora me envie o nome da fazenda ou negocio." {
 		t.Fatalf("expected onboarding producer reply, got %q", got)
 	}
 
@@ -835,7 +886,7 @@ func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
 	if registration.calls != 1 {
 		t.Fatalf("expected registration to be created once, got %d", registration.calls)
 	}
-	if got := farmStep.AssistantMessage.Text; got != "Cadastro concluido. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode enviar registros." {
+	if got := farmStep.AssistantMessage.Text; got != "Pronto. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode me enviar registros e consultas." {
 		t.Fatalf("expected onboarding completion reply, got %q", got)
 	}
 	if _, found, err := onboardingStates.GetByPhoneNumber(context.Background(), "5511999999999"); err != nil || found {
@@ -848,7 +899,7 @@ func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
 	if lastMessage.Direction != domain.OnboardingMessageDirectionOutbound {
 		t.Fatalf("expected last onboarding message to be outbound, got %q", lastMessage.Direction)
 	}
-	if lastMessage.Body != "Cadastro concluido. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode enviar registros." {
+	if lastMessage.Body != "Pronto. Seu numero foi vinculado a Fazenda Boa Vista. Agora voce ja pode me enviar registros e consultas." {
 		t.Fatalf("unexpected onboarding completion trace: %q", lastMessage.Body)
 	}
 }
@@ -902,7 +953,7 @@ func TestCaptureServiceRepliesWhenPhoneNumberHasAmbiguousContext(t *testing.T) {
 	if sender.sendCount != 1 {
 		t.Fatalf("expected one ambiguous-context reply, got %d", sender.sendCount)
 	}
-	expectedReply := "Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n1. Fazenda Boa Vista\n2. Sitio Santa Luzia"
+	expectedReply := "Seu numero esta vinculado a mais de uma fazenda. Me responda com o numero da fazenda:\n1. Fazenda Boa Vista\n2. Sitio Santa Luzia"
 	if got := result.AssistantMessage.Text; got != expectedReply {
 		t.Fatalf("expected ambiguous-context selection reply, got %q", got)
 	}
@@ -977,7 +1028,7 @@ func TestCaptureServiceSelectsContextForAmbiguousPhoneNumber(t *testing.T) {
 	if processor.calls != 0 {
 		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
 	}
-	if got := result.AssistantMessage.Text; got != "Contexto definido para Sitio Santa Luzia. Envie a informacao novamente." {
+	if got := result.AssistantMessage.Text; got != "Pronto. Vou usar o contexto de Sitio Santa Luzia. Pode enviar a informacao novamente." {
 		t.Fatalf("expected selected-context reply, got %q", got)
 	}
 	state, found, err := phoneContexts.GetByPhoneNumber(context.Background(), "5511999999999")
@@ -1046,7 +1097,7 @@ func TestCaptureServiceSwitchesContextWhenRequested(t *testing.T) {
 	if processor.calls != 0 {
 		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
 	}
-	expectedReply := "Seu numero esta vinculado a mais de uma fazenda. Responda com o numero:\n1. Fazenda Boa Vista\n2. Sitio Santa Luzia"
+	expectedReply := "Seu numero esta vinculado a mais de uma fazenda. Me responda com o numero da fazenda:\n1. Fazenda Boa Vista\n2. Sitio Santa Luzia"
 	if got := result.AssistantMessage.Text; got != expectedReply {
 		t.Fatalf("expected switch-context selection reply, got %q", got)
 	}
@@ -1107,7 +1158,7 @@ func TestCaptureServiceRepliesWhenSwitchRequestedWithSingleContext(t *testing.T)
 	if processor.calls != 0 {
 		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
 	}
-	if got := result.AssistantMessage.Text; got != "Seu numero ja esta vinculado a Fazenda Boa Vista." {
+	if got := result.AssistantMessage.Text; got != "Certo. Seu numero ja esta vinculado a Fazenda Boa Vista." {
 		t.Fatalf("expected single-context reply, got %q", got)
 	}
 }
@@ -1448,7 +1499,7 @@ func TestBuildDraftConfirmationPromptFromInterpretation(t *testing.T) {
 		OccurredAt:  &occurredAt,
 	})
 
-	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nResponda SIM para confirmar ou NAO para corrigir."
+	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
 	if prompt != expected {
 		t.Fatalf("unexpected confirmation prompt:\n%s", prompt)
 	}
@@ -1468,7 +1519,7 @@ func TestBuildDraftConfirmationPromptFromInterpretationHealth(t *testing.T) {
 		},
 	})
 
-	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nResponda SIM para confirmar ou NAO para corrigir."
+	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
 	if prompt != expected {
 		t.Fatalf("unexpected health confirmation prompt:\n%s", prompt)
 	}
@@ -1524,7 +1575,7 @@ func TestCaptureServiceStartsHealthTreatmentFlow(t *testing.T) {
 	if sender.sendCount != 1 {
 		t.Fatalf("expected one outbound question, got %d", sender.sendCount)
 	}
-	if sender.lastBody != "Qual a data do diagnostico?" {
+	if sender.lastBody != "Certo. Qual foi a data do diagnostico?" {
 		t.Fatalf("unexpected health question: %q", sender.lastBody)
 	}
 
@@ -1538,7 +1589,7 @@ func TestCaptureServiceStartsHealthTreatmentFlow(t *testing.T) {
 	if state.AnimalCode != "32" {
 		t.Fatalf("expected animal code 32, got %q", state.AnimalCode)
 	}
-	if got := result.AssistantMessage.Text; got != "Qual a data do diagnostico?" {
+	if got := result.AssistantMessage.Text; got != "Certo. Qual foi a data do diagnostico?" {
 		t.Fatalf("unexpected assistant message %q", got)
 	}
 }
@@ -1720,7 +1771,7 @@ func TestCaptureServiceAsksForCorrelatedExpensesAfterHealthConfirmation(t *testi
 	if state.Step != domain.CorrelatedExpenseStepAwaitingDecision {
 		t.Fatalf("expected awaiting decision step, got %q", state.Step)
 	}
-	if !strings.Contains(sender.lastBody, "Voce deseja lancar tambem os gastos") {
+	if !strings.Contains(sender.lastBody, "Deseja lancar tambem os gastos") {
 		t.Fatalf("unexpected follow-up prompt:\n%s", sender.lastBody)
 	}
 	if result.AssistantMessage.Text != sender.lastBody {
