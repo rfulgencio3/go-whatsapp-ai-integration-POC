@@ -12,6 +12,9 @@ import (
 type ReplyFormatter interface {
 	BuildConfirmedReply(event domain.BusinessEvent) string
 	BuildHelpReply(topic helpTopic, registered bool) string
+	BuildOnboardingHelpReply(step domain.OnboardingStep) string
+	BuildHealthTreatmentHelpReply(state domain.HealthTreatmentState) string
+	BuildCorrelatedExpenseHelpReply(state domain.CorrelatedExpenseState) string
 	BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string
 	BuildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string
 	BuildCorrelatedExpenseDeclinedReply() string
@@ -77,6 +80,18 @@ func (defaultReplyFormatter) BuildConfirmedReply(event domain.BusinessEvent) str
 
 func (defaultReplyFormatter) BuildHelpReply(topic helpTopic, registered bool) string {
 	return buildHelpReply(topic, registered)
+}
+
+func (defaultReplyFormatter) BuildOnboardingHelpReply(step domain.OnboardingStep) string {
+	return buildOnboardingHelpReply(step)
+}
+
+func (defaultReplyFormatter) BuildHealthTreatmentHelpReply(state domain.HealthTreatmentState) string {
+	return buildHealthTreatmentHelpReply(state)
+}
+
+func (defaultReplyFormatter) BuildCorrelatedExpenseHelpReply(state domain.CorrelatedExpenseState) string {
+	return buildCorrelatedExpenseHelpReply(state)
 }
 
 func (defaultReplyFormatter) BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {

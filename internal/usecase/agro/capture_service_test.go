@@ -924,6 +924,122 @@ func TestCaptureServiceRepliesWithQueryHelpExamples(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceRepliesWithOnboardingContextHelp(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	onboardingStates := &stubOnboardingStateRepository{
+		states: map[string]domain.OnboardingState{
+			"5511999999999": {
+				PhoneNumber: "5511999999999",
+				Step:        domain.OnboardingStepAwaitingFarmName,
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{},
+		nil,
+		nil,
+		onboardingStates,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-help-onboarding-1",
+		PhoneNumber: "5511999999999",
+		Text:        "ajuda",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Estamos quase terminando o cadastro") {
+		t.Fatalf("unexpected onboarding contextual help: %q", result.AssistantMessage.Text)
+	}
+}
+
+func TestCaptureServiceRepliesWithHealthContextHelp(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	healthStates := &stubHealthTreatmentStateRepository{
+		states: map[string]domain.HealthTreatmentState{
+			"5511999999999": {
+				PhoneNumber: "5511999999999",
+				FarmID:      "farm-1",
+				AnimalCode:  "32",
+				Step:        domain.HealthTreatmentStepAwaitingTreatmentDays,
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+	service.SetHealthTreatmentStateRepository(healthStates)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-help-health-1",
+		PhoneNumber: "5511999999999",
+		Text:        "ajuda",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Estamos registrando um tratamento de saude animal.") {
+		t.Fatalf("unexpected health contextual help: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Animal atual: 32.") || !strings.Contains(result.AssistantMessage.Text, "por quantos dias sera o tratamento") {
+		t.Fatalf("expected health step guidance in contextual help, got %q", result.AssistantMessage.Text)
+	}
+}
+
 func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
 	t.Parallel()
 

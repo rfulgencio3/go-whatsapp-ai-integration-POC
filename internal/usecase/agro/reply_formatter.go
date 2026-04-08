@@ -71,6 +71,55 @@ func buildHelpReply(topic helpTopic, registered bool) string {
 	return strings.Join(lines, "\n")
 }
 
+func buildOnboardingHelpReply(step domain.OnboardingStep) string {
+	switch step {
+	case domain.OnboardingStepAwaitingProducerName:
+		return "Estamos no cadastro inicial. Me envie o nome do produtor ou responsavel para continuar."
+	case domain.OnboardingStepAwaitingFarmName:
+		return "Estamos quase terminando o cadastro. Agora me envie o nome da fazenda ou negocio."
+	default:
+		return "Se quiser iniciar o cadastro, responda CADASTRAR."
+	}
+}
+
+func buildHealthTreatmentHelpReply(state domain.HealthTreatmentState) string {
+	base := "Estamos registrando um tratamento de saude animal."
+	if strings.TrimSpace(state.AnimalCode) != "" {
+		base += " Animal atual: " + strings.TrimSpace(state.AnimalCode) + "."
+	}
+
+	switch state.Step {
+	case domain.HealthTreatmentStepAwaitingDiagnosisDate:
+		return base + " Agora me informe a data do diagnostico. Pode ser, por exemplo, HOJE ou 07/04/2026."
+	case domain.HealthTreatmentStepAwaitingMedicine:
+		return base + " Agora me informe o medicamento aplicado."
+	case domain.HealthTreatmentStepAwaitingTreatmentDays:
+		return base + " Agora me informe por quantos dias sera o tratamento. Exemplo: 5 dias."
+	default:
+		return base + " Pode me enviar as proximas informacoes do tratamento."
+	}
+}
+
+func buildCorrelatedExpenseHelpReply(state domain.CorrelatedExpenseState) string {
+	base := "Estamos registrando os gastos relacionados a esse tratamento."
+	if strings.TrimSpace(state.AnimalCode) != "" {
+		base += " Animal atual: " + strings.TrimSpace(state.AnimalCode) + "."
+	}
+
+	switch state.Step {
+	case domain.CorrelatedExpenseStepAwaitingDecision:
+		return base + " Responda SIM para lancar os gastos ou NAO para pular essa etapa."
+	case domain.CorrelatedExpenseStepAwaitingMedicineAmount:
+		return base + " Agora me informe o valor gasto com medicamento. Se nao houve, responda 0."
+	case domain.CorrelatedExpenseStepAwaitingVetAmount:
+		return base + " Agora me informe o valor da consulta veterinaria. Se nao houve, responda 0."
+	case domain.CorrelatedExpenseStepAwaitingExamAmount:
+		return base + " Agora me informe o valor de exames. Se nao houve, responda 0."
+	default:
+		return base
+	}
+}
+
 func buildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {
 	return buildConfirmedReply(event) + "\nDeseja lancar tambem os gastos com medicamento, consulta veterinaria e exames? Responda SIM ou NAO."
 }

@@ -16,6 +16,36 @@ func (s *CaptureService) handleHelpRequest(ctx context.Context, message chat.Inc
 	}
 
 	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	if s.onboardingStates != nil {
+		state, found, err := s.onboardingStates.GetByPhoneNumber(ctx, normalizedPhone)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if found {
+			return s.sendHelpReply(ctx, message, normalizedPhone, s.replyFormatter.BuildOnboardingHelpReply(state.Step))
+		}
+	}
+
+	if s.healthStates != nil {
+		state, found, err := s.healthStates.GetByPhoneNumber(ctx, normalizedPhone)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if found {
+			return s.sendHelpReply(ctx, message, normalizedPhone, s.replyFormatter.BuildHealthTreatmentHelpReply(state))
+		}
+	}
+
+	if s.correlatedStates != nil {
+		state, found, err := s.correlatedStates.GetByPhoneNumber(ctx, normalizedPhone)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if found {
+			return s.sendHelpReply(ctx, message, normalizedPhone, s.replyFormatter.BuildCorrelatedExpenseHelpReply(state))
+		}
+	}
+
 	registered := false
 	if s.farmMemberships != nil {
 		memberships, err := s.farmMemberships.FindActiveByPhoneNumber(ctx, normalizedPhone)
@@ -25,7 +55,10 @@ func (s *CaptureService) handleHelpRequest(ctx context.Context, message chat.Inc
 		registered = len(memberships) > 0
 	}
 
-	replyText := s.replyFormatter.BuildHelpReply(s.workflowRouter.ParseHelpTopic(message.Text), registered)
+	return s.sendHelpReply(ctx, message, normalizedPhone, s.replyFormatter.BuildHelpReply(s.workflowRouter.ParseHelpTopic(message.Text), registered))
+}
+
+func (s *CaptureService) sendHelpReply(ctx context.Context, message chat.IncomingMessage, normalizedPhone, replyText string) (bool, chatbot.ProcessResult, error) {
 	now := time.Now().UTC()
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
 		return false, chatbot.ProcessResult{}, err
