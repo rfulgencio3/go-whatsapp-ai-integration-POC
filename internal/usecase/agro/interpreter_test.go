@@ -27,21 +27,34 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 	}{
 		{
 			name:             "input purchase",
-			text:             "Comprei 10 sacos de ração por 850 reais",
+			text:             "Comprei 10 sacos de racao por 850 reais",
 			expectedIntent:   "finance.input_purchase",
 			expectedCategory: "finance",
 			expectedSubcat:   "input_purchase",
 			expectedAmount:   float64Ptr(850),
 			expectedQuantity: float64Ptr(10),
 			expectedUnit:     "saco",
+			expectOccurredAt: true,
+		},
+		{
+			name:             "input purchase with unit price each",
+			text:             "Comprei 10 sacos de racao, R$ 20 cada",
+			expectedIntent:   "finance.input_purchase",
+			expectedCategory: "finance",
+			expectedSubcat:   "input_purchase",
+			expectedAmount:   float64Ptr(200),
+			expectedQuantity: float64Ptr(10),
+			expectedUnit:     "saco",
+			expectOccurredAt: true,
 		},
 		{
 			name:             "generic expense",
-			text:             "Paguei 300 reais de veterinário",
+			text:             "Paguei 300 reais de veterinario",
 			expectedIntent:   "finance.expense",
 			expectedCategory: "finance",
 			expectedSubcat:   "expense",
 			expectedAmount:   float64Ptr(300),
+			expectOccurredAt: true,
 		},
 		{
 			name:             "revenue",
@@ -50,6 +63,7 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			expectedCategory: "finance",
 			expectedSubcat:   "revenue",
 			expectedAmount:   float64Ptr(1200),
+			expectOccurredAt: true,
 		},
 		{
 			name:             "insemination",
@@ -86,6 +100,7 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			expectedIntent:   "operations.note",
 			expectedCategory: "operations",
 			expectedSubcat:   "note",
+			expectOccurredAt: true,
 		},
 	}
 
@@ -125,6 +140,14 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			if testCase.expectedSubcat == "insemination" {
 				if got := result.Attributes["expected_calving_date"]; got != "14/01/2027" {
 					t.Fatalf("expected expected_calving_date 14/01/2027, got %q", got)
+				}
+			}
+			if testCase.name == "input purchase with unit price each" {
+				if got := result.Attributes["unit_price"]; got != "20.00" {
+					t.Fatalf("expected unit_price 20.00, got %q", got)
+				}
+				if got := result.Attributes["amount_inferred_from_unit_price"]; got != "true" {
+					t.Fatalf("expected amount_inferred_from_unit_price true, got %q", got)
 				}
 			}
 			if result.RawOutputJSON == "" {

@@ -2002,7 +2002,7 @@ func TestBuildDraftConfirmationPromptFromInterpretation(t *testing.T) {
 		OccurredAt:  &occurredAt,
 	})
 
-	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
+	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao por 850 reais\nValor: R$ 850.00\nQuantidade: 10 saco\nData: 07/04/2026 06:30\nSe estiver tudo certo, responda SIM. Se precisar ajustar ou completar alguma informacao, responda NAO."
 	if prompt != expected {
 		t.Fatalf("unexpected confirmation prompt:\n%s", prompt)
 	}
@@ -2022,7 +2022,7 @@ func TestBuildDraftConfirmationPromptFromInterpretationHealth(t *testing.T) {
 		},
 	})
 
-	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
+	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nSe estiver tudo certo, responda SIM. Se precisar ajustar ou completar alguma informacao, responda NAO."
 	if prompt != expected {
 		t.Fatalf("unexpected health confirmation prompt:\n%s", prompt)
 	}
@@ -2040,9 +2040,53 @@ func TestBuildDraftConfirmationPromptFromInterpretationInsemination(t *testing.T
 		OccurredAt:  &occurredAt,
 	})
 
-	expected := "Categoria: Manejo reprodutivo\nEvento: A vaca 32 foi inseminada hoje\nPrevisao de parto: 15/01/2027\nData: 07/04/2026 06:00\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
+	expected := "Categoria: Manejo reprodutivo\nEvento: A vaca 32 foi inseminada hoje\nPrevisao de parto: 15/01/2027\nData: 07/04/2026 06:00\nSe estiver tudo certo, responda SIM. Se precisar ajustar ou completar alguma informacao, responda NAO."
 	if prompt != expected {
 		t.Fatalf("unexpected insemination confirmation prompt:\n%s", prompt)
+	}
+}
+
+func TestBuildDraftConfirmationPromptFromInterpretationCalculatesTotalFromUnitPrice(t *testing.T) {
+	t.Parallel()
+
+	occurredAt := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
+	prompt := buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
+		Category:    "finance",
+		Subcategory: "input_purchase",
+		Description: "Comprei 10 sacos de racao, R$ 20 cada",
+		Amount:      float64Ptr(200),
+		Currency:    "BRL",
+		Quantity:    float64Ptr(10),
+		Unit:        "saco",
+		OccurredAt:  &occurredAt,
+		Attributes: map[string]string{
+			"unit_price":                      "20.00",
+			"amount_inferred_from_unit_price": "true",
+		},
+	})
+
+	expected := "Categoria: Compra de insumos\nDescricao: Comprei 10 sacos de racao, R$ 20 cada\nValor unitario: R$ 20.00\nValor total: R$ 200.00\nQuantidade: 10 saco\nData: 08/04/2026 09:00\nSe estiver tudo certo, responda SIM. Se precisar ajustar ou completar alguma informacao, responda NAO."
+	if prompt != expected {
+		t.Fatalf("unexpected unit-price confirmation prompt:\n%s", prompt)
+	}
+}
+
+func TestBuildDraftConfirmationPromptFromInterpretationHighlightsMissingPurchaseFields(t *testing.T) {
+	t.Parallel()
+
+	occurredAt := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
+	prompt := buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
+		Category:    "finance",
+		Subcategory: "input_purchase",
+		Description: "Comprei racao",
+		OccurredAt:  &occurredAt,
+	})
+
+	if !strings.Contains(prompt, "Faltou informar: quantidade, valor total.") {
+		t.Fatalf("expected missing details prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Data: 08/04/2026 09:00") {
+		t.Fatalf("expected occurred date in prompt, got:\n%s", prompt)
 	}
 }
 

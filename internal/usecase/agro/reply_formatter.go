@@ -369,8 +369,15 @@ func buildDraftConfirmationPromptFromInterpretation(result InterpretationResult)
 	if detail := buildConfirmationDetail(result); detail != "" {
 		lines = append(lines, detail)
 	}
+	if unitPrice := extractUnitPriceAttribute(result.Attributes); unitPrice != nil {
+		lines = append(lines, fmt.Sprintf("Valor unitario: %s", formatCurrency(unitPrice, result.Currency)))
+	}
 	if result.Amount != nil {
-		lines = append(lines, fmt.Sprintf("Valor: %s", formatCurrency(result.Amount, result.Currency)))
+		label := "Valor"
+		if unitPrice := extractUnitPriceAttribute(result.Attributes); unitPrice != nil {
+			label = "Valor total"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", label, formatCurrency(result.Amount, result.Currency)))
 	}
 	if result.Quantity != nil {
 		lines = append(lines, fmt.Sprintf("Quantidade: %s", formatQuantity(result.Quantity, result.Unit)))
@@ -378,7 +385,10 @@ func buildDraftConfirmationPromptFromInterpretation(result InterpretationResult)
 	if occurredAt := formatOccurredAt(result.OccurredAt); occurredAt != "" {
 		lines = append(lines, fmt.Sprintf("Data: %s", occurredAt))
 	}
-	lines = append(lines, "Se estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO.")
+	if missing := buildMissingDetailsPrompt(result); missing != "" {
+		lines = append(lines, missing)
+	}
+	lines = append(lines, "Se estiver tudo certo, responda SIM. Se precisar ajustar ou completar alguma informacao, responda NAO.")
 
 	return strings.Join(lines, "\n")
 }
@@ -450,6 +460,27 @@ func buildEventSummaryLines(event domain.BusinessEvent) []string {
 		lines = append(lines, fmt.Sprintf("Data: %s", occurredAt))
 	}
 	return lines
+}
+
+func buildMissingDetailsPrompt(result InterpretationResult) string {
+	missing := make([]string, 0, 3)
+	switch {
+	case result.Category == "finance" && result.Subcategory == "input_purchase":
+		if result.Quantity == nil {
+			missing = append(missing, "quantidade")
+		}
+		if result.Amount == nil {
+			missing = append(missing, "valor total")
+		}
+	case result.Category == "finance" && (result.Subcategory == "expense" || result.Subcategory == "revenue"):
+		if result.Amount == nil {
+			missing = append(missing, "valor")
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "Faltou informar: " + strings.Join(missing, ", ") + "."
 }
 
 func buildEventDetail(event domain.BusinessEvent) string {
@@ -553,6 +584,21 @@ func formatCurrency(amount *float64, currency string) string {
 		return fmt.Sprintf("R$ %.2f", *amount)
 	}
 	return fmt.Sprintf("%s %.2f", strings.ToUpper(strings.TrimSpace(currency)), *amount)
+}
+
+func extractUnitPriceAttribute(attributes map[string]string) *float64 {
+	if len(attributes) == 0 {
+		return nil
+	}
+	value, ok := attributes["unit_price"]
+	if !ok {
+		return nil
+	}
+	parsed, ok := parseDecimal(value)
+	if !ok {
+		return nil
+	}
+	return &parsed
 }
 
 func formatQuantity(quantity *float64, unit string) string {

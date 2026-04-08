@@ -20,6 +20,7 @@ const (
 var (
 	currencyBeforePattern = regexp.MustCompile(`r\$\s*(\d+(?:[.,]\d{1,2})?)`)
 	currencyAfterPattern  = regexp.MustCompile(`(\d+(?:[.,]\d{1,2})?)\s*(?:reais|real)`)
+	unitPricePattern      = regexp.MustCompile(`(?:r\$\s*(\d+(?:[.,]\d{1,2})?)|(\d+(?:[.,]\d{1,2})?)\s*(?:reais|real))\s*cada\b`)
 	quantityPattern       = regexp.MustCompile(`(\d+(?:[.,]\d+)?)\s*(sacos?|kg|quilo(?:s|gramas?)?|litros?|l|toneladas?|ton|unidades?|un|cabecas?|cabecas?|cabecas?)`)
 	animalPattern         = regexp.MustCompile(`(?:vaca|matriz|novilha|animal)\s+([a-z0-9-]+)`)
 	teatPattern           = regexp.MustCompile(`t(?:eta)?\s*([1-4])`)
@@ -120,12 +121,17 @@ func (r *RuleBasedInterpreter) Interpret(_ context.Context, input Interpretation
 		result.Confidence = 0.60
 		result.RequiresConfirmation = false
 	}
+	if result.OccurredAt == nil && result.Category != "health" && !input.OccurredAt.IsZero() {
+		occurredAt := input.OccurredAt.UTC()
+		result.OccurredAt = &occurredAt
+	}
 
-	result.Amount = extractAmount(text)
+	result.Quantity, result.Unit = extractQuantity(text)
+	result.Amount = extractAmount(text, result.Quantity)
 	if result.Amount != nil {
 		result.Currency = "BRL"
 	}
-	result.Quantity, result.Unit = extractQuantity(text)
+	enrichPricingAttributes(result.Attributes, text, result.Quantity, result.Amount)
 	if len(result.Attributes) == 0 {
 		result.Attributes = nil
 	}
@@ -235,7 +241,11 @@ func normalizeText(value string) string {
 	return replacer.Replace(strings.ToLower(strings.TrimSpace(value)))
 }
 
-func extractAmount(text string) *float64 {
+func extractAmount(text string, quantity *float64) *float64 {
+	if unitPrice, ok := extractUnitPrice(normalizeText(text)); ok && quantity != nil {
+		total := unitPrice * *quantity
+		return &total
+	}
 	if matches := currencyBeforePattern.FindStringSubmatch(normalizeText(text)); len(matches) > 1 {
 		if value, ok := parseDecimal(matches[1]); ok {
 			return &value
@@ -248,6 +258,19 @@ func extractAmount(text string) *float64 {
 	}
 
 	return nil
+}
+
+func extractUnitPrice(normalizedText string) (float64, bool) {
+	matches := unitPricePattern.FindStringSubmatch(normalizedText)
+	if len(matches) < 3 {
+		return 0, false
+	}
+	for _, candidate := range matches[1:] {
+		if value, ok := parseDecimal(candidate); ok {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func extractQuantity(text string) (*float64, string) {
@@ -369,6 +392,22 @@ func enrichInseminationAttributes(attributes map[string]string, occurredAt *time
 
 	expectedCalvingDate := occurredAt.UTC().AddDate(0, 0, cattleGestationDays)
 	attributes["expected_calving_date"] = expectedCalvingDate.Format("02/01/2006")
+}
+
+func enrichPricingAttributes(attributes map[string]string, text string, quantity, amount *float64) {
+	if attributes == nil {
+		return
+	}
+
+	unitPrice, ok := extractUnitPrice(normalizeText(text))
+	if !ok {
+		return
+	}
+
+	attributes["unit_price"] = strconv.FormatFloat(unitPrice, 'f', 2, 64)
+	if quantity != nil && amount != nil {
+		attributes["amount_inferred_from_unit_price"] = "true"
+	}
 }
 
 func buildInterpretationPayload(result InterpretationResult) string {

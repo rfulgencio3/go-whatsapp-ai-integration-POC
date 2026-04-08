@@ -295,7 +295,7 @@ func parseExpenseAmount(text string) (float64, bool) {
 	if normalized == "" {
 		return 0, false
 	}
-	if amount := extractAmount(text); amount != nil {
+	if amount := extractAmount(text, nil); amount != nil {
 		return *amount, true
 	}
 	for _, token := range strings.Fields(normalized) {

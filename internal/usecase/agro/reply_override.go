@@ -3,6 +3,7 @@ package agro
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/usecase/chatbot"
@@ -24,6 +25,7 @@ func (r *ReplyOverrideResolver) ResolveReply(ctx context.Context, message chat.I
 	interpretation, err := r.interpreter.Interpret(ctx, InterpretationInput{
 		MessageType: toDomainMessageType(message.Type),
 		Text:        strings.TrimSpace(message.Text),
+		OccurredAt:  time.Now().UTC(),
 	})
 	if err != nil {
 		return chatbot.ReplyOverride{}, false, err
