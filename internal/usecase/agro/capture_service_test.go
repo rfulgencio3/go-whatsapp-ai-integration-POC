@@ -2028,6 +2028,43 @@ func TestBuildDraftConfirmationPromptFromInterpretationHealth(t *testing.T) {
 	}
 }
 
+func TestBuildDraftConfirmationPromptFromInterpretationInsemination(t *testing.T) {
+	t.Parallel()
+
+	occurredAt := time.Date(2026, time.April, 7, 9, 0, 0, 0, time.UTC)
+	prompt := buildDraftConfirmationPromptFromInterpretation(InterpretationResult{
+		Category:    "reproduction",
+		Subcategory: "insemination",
+		Description: "A vaca 32 foi inseminada hoje",
+		AnimalCode:  "32",
+		OccurredAt:  &occurredAt,
+	})
+
+	expected := "Categoria: Manejo reprodutivo\nEvento: A vaca 32 foi inseminada hoje\nPrevisao de parto: 15/01/2027\nData: 07/04/2026 06:00\nSe estiver tudo certo, responda SIM. Se precisar ajustar algo, responda NAO."
+	if prompt != expected {
+		t.Fatalf("unexpected insemination confirmation prompt:\n%s", prompt)
+	}
+}
+
+func TestBuildPostConfirmationReplyIncludesExpectedCalvingDateForInsemination(t *testing.T) {
+	t.Parallel()
+
+	occurredAt := time.Date(2026, time.April, 7, 9, 0, 0, 0, time.UTC)
+	reply := buildPostConfirmationReply(domain.BusinessEvent{
+		ID:          "event-1",
+		Category:    "reproduction",
+		Subcategory: "insemination",
+		Description: "A vaca 32 foi inseminada hoje",
+		AnimalCode:  "32",
+		OccurredAt:  &occurredAt,
+		Status:      domain.EventStatusConfirmed,
+	}, nil, false)
+
+	if !strings.Contains(reply, "Previsao de parto: 15/01/2027") {
+		t.Fatalf("expected expected calving date in post-confirmation reply:\n%s", reply)
+	}
+}
+
 func TestCaptureServiceStartsHealthTreatmentFlow(t *testing.T) {
 	t.Parallel()
 

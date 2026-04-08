@@ -14,6 +14,7 @@ const (
 	interpreterProvider = "rule-engine"
 	interpreterModel    = "agro-v1"
 	promptVersion       = "rules-v1"
+	cattleGestationDays = 283
 )
 
 var (
@@ -93,6 +94,7 @@ func (r *RuleBasedInterpreter) Interpret(_ context.Context, input Interpretation
 		result.Subcategory = "insemination"
 		result.Confidence = 0.95
 		result.RequiresConfirmation = true
+		enrichInseminationAttributes(result.Attributes, result.OccurredAt)
 	case isInputPurchase(normalizedText):
 		result.NormalizedIntent = "finance.input_purchase"
 		result.Category = "finance"
@@ -358,6 +360,15 @@ func resolveOccurredAt(text string, fallback time.Time) *time.Time {
 	}
 
 	return nil
+}
+
+func enrichInseminationAttributes(attributes map[string]string, occurredAt *time.Time) {
+	if attributes == nil || occurredAt == nil {
+		return
+	}
+
+	expectedCalvingDate := occurredAt.UTC().AddDate(0, 0, cattleGestationDays)
+	attributes["expected_calving_date"] = expectedCalvingDate.Format("02/01/2006")
 }
 
 func buildInterpretationPayload(result InterpretationResult) string {

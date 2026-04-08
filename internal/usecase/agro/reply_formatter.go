@@ -418,10 +418,16 @@ func buildConfirmationDetail(result InterpretationResult) string {
 	case result.Category == "finance" && result.Subcategory == "revenue" && description != "":
 		return fmt.Sprintf("Descricao: %s", description)
 	case result.Category == "reproduction" && result.Subcategory == "insemination":
+		lines := make([]string, 0, 2)
 		if description == "" {
-			return "Evento: inseminacao"
+			lines = append(lines, "Evento: inseminacao")
+		} else {
+			lines = append(lines, fmt.Sprintf("Evento: %s", description))
 		}
-		return fmt.Sprintf("Evento: %s", description)
+		if expectedCalving := formatExpectedCalvingFromOccurredAt(result.OccurredAt); expectedCalving != "" {
+			lines = append(lines, fmt.Sprintf("Previsao de parto: %s", expectedCalving))
+		}
+		return strings.Join(lines, "\n")
 	case description != "":
 		return fmt.Sprintf("Descricao: %s", description)
 	default:
@@ -452,7 +458,11 @@ func buildEventDetail(event domain.BusinessEvent) string {
 		return buildHealthEventDetail(event)
 	case strings.TrimSpace(event.Description) != "":
 		if event.Category == "reproduction" && event.Subcategory == "insemination" {
-			return fmt.Sprintf("Evento: %s", strings.TrimSpace(event.Description))
+			lines := []string{fmt.Sprintf("Evento: %s", strings.TrimSpace(event.Description))}
+			if expectedCalving := formatExpectedCalvingFromOccurredAt(event.OccurredAt); expectedCalving != "" {
+				lines = append(lines, fmt.Sprintf("Previsao de parto: %s", expectedCalving))
+			}
+			return strings.Join(lines, "\n")
 		}
 		return fmt.Sprintf("Descricao: %s", strings.TrimSpace(event.Description))
 	default:
@@ -560,4 +570,11 @@ func formatOccurredAt(occurredAt *time.Time) string {
 		return ""
 	}
 	return occurredAt.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006 15:04")
+}
+
+func formatExpectedCalvingFromOccurredAt(occurredAt *time.Time) string {
+	if occurredAt == nil {
+		return ""
+	}
+	return occurredAt.In(time.FixedZone("BRT", -3*60*60)).AddDate(0, 0, cattleGestationDays).Format("02/01/2006")
 }

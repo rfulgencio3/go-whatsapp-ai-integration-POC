@@ -122,6 +122,11 @@ func TestRuleBasedInterpreterInterpret(t *testing.T) {
 			if !testCase.expectOccurredAt && result.OccurredAt != nil {
 				t.Fatalf("did not expect occurred_at, got %v", result.OccurredAt)
 			}
+			if testCase.expectedSubcat == "insemination" {
+				if got := result.Attributes["expected_calving_date"]; got != "14/01/2027" {
+					t.Fatalf("expected expected_calving_date 14/01/2027, got %q", got)
+				}
+			}
 			if result.RawOutputJSON == "" {
 				t.Fatalf("expected raw output json")
 			}
