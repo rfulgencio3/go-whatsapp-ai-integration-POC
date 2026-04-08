@@ -234,25 +234,33 @@ func (s *CaptureService) persistConfirmationInbound(ctx context.Context, members
 }
 
 func (s *CaptureService) preparePostConfirmationReply(ctx context.Context, phoneNumber string, membership domain.FarmMembership, event domain.BusinessEvent, defaultReply string, now time.Time) (string, error) {
-	if s.correlatedStates == nil || event.Category != "health" {
-		return defaultReply, nil
+	recent := make([]domain.BusinessEvent, 0)
+	if s.businessEvents != nil {
+		items, err := s.businessEvents.ListRecentConfirmedByIntent(ctx, membership.FarmID, event.Category, event.Subcategory, 5)
+		if err != nil {
+			return "", err
+		}
+		recent = items
 	}
 
-	state := domain.CorrelatedExpenseState{
-		PhoneNumber:     phoneNumber,
-		FarmID:          membership.FarmID,
-		RootEventID:     event.ID,
-		RootCategory:    event.Category,
-		RootSubcategory: event.Subcategory,
-		AnimalCode:      event.AnimalCode,
-		Description:     event.Description,
-		OccurredAt:      event.OccurredAt,
-		Step:            domain.CorrelatedExpenseStepAwaitingDecision,
-		UpdatedAt:       now,
-	}
-	if err := s.correlatedStates.Upsert(ctx, &state); err != nil {
-		return "", err
+	includeCorrelatedExpensePrompt := s.correlatedStates != nil && event.Category == "health"
+	if includeCorrelatedExpensePrompt {
+		state := domain.CorrelatedExpenseState{
+			PhoneNumber:     phoneNumber,
+			FarmID:          membership.FarmID,
+			RootEventID:     event.ID,
+			RootCategory:    event.Category,
+			RootSubcategory: event.Subcategory,
+			AnimalCode:      event.AnimalCode,
+			Description:     event.Description,
+			OccurredAt:      event.OccurredAt,
+			Step:            domain.CorrelatedExpenseStepAwaitingDecision,
+			UpdatedAt:       now,
+		}
+		if err := s.correlatedStates.Upsert(ctx, &state); err != nil {
+			return "", err
+		}
 	}
 
-	return s.replyFormatter.BuildHealthExpenseCorrelationPrompt(event), nil
+	return s.replyFormatter.BuildPostConfirmationReply(event, recent, includeCorrelatedExpensePrompt), nil
 }

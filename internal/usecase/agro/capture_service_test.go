@@ -333,6 +333,23 @@ func (s *stubBusinessEventRepository) FindByID(_ context.Context, eventID string
 	return domain.BusinessEvent{}, false, nil
 }
 
+func (s *stubBusinessEventRepository) ListRecentConfirmedByIntent(_ context.Context, _ string, category, subcategory string, limit int) ([]domain.BusinessEvent, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	result := make([]domain.BusinessEvent, 0, limit)
+	for _, event := range s.events {
+		if event.Category != category || event.Subcategory != subcategory || event.Status != domain.EventStatusConfirmed {
+			continue
+		}
+		result = append(result, event)
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
+}
+
 func (s *stubBusinessEventRepository) ListActiveMilkWithdrawalAnimals(_ context.Context, _ string, _ time.Time) ([]domain.MilkWithdrawalAnimal, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -1578,6 +1595,12 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	if len(assistantMessages.messages) != 1 {
 		t.Fatalf("expected confirmation assistant message to be saved, got %d", len(assistantMessages.messages))
 	}
+	if !strings.Contains(sender.lastBody, "Resumo salvo:") || !strings.Contains(sender.lastBody, "Top 5 mais recentes dessa categoria:") {
+		t.Fatalf("expected post-confirmation summary and ranking, got:\n%s", sender.lastBody)
+	}
+	if !strings.Contains(sender.lastBody, "Categoria: Compra de insumos") {
+		t.Fatalf("expected confirmed finance summary in reply, got:\n%s", sender.lastBody)
+	}
 	if assistantMessages.messages[0].ReplyType != domain.ReplyTypeConfirmation {
 		t.Fatalf("expected reply type confirmation, got %q", assistantMessages.messages[0].ReplyType)
 	}
@@ -1996,6 +2019,9 @@ func TestCaptureServiceAsksForCorrelatedExpensesAfterHealthConfirmation(t *testi
 	}
 	if state.Step != domain.CorrelatedExpenseStepAwaitingDecision {
 		t.Fatalf("expected awaiting decision step, got %q", state.Step)
+	}
+	if !strings.Contains(sender.lastBody, "Resumo salvo:") || !strings.Contains(sender.lastBody, "Top 5 mais recentes dessa categoria:") {
+		t.Fatalf("expected health summary and ranking before follow-up, got:\n%s", sender.lastBody)
 	}
 	if !strings.Contains(sender.lastBody, "Deseja lancar tambem os gastos") {
 		t.Fatalf("unexpected follow-up prompt:\n%s", sender.lastBody)

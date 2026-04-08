@@ -1200,6 +1200,111 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 	return event, true, nil
 }
 
+func (r *BusinessEventRepository) ListRecentConfirmedByIntent(ctx context.Context, farmID, category, subcategory string, limit int) ([]agro.BusinessEvent, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	rows, err := r.database.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			farm_id,
+			source_message_id,
+			interpretation_run_id,
+			category,
+			subcategory,
+			occurred_at,
+			description,
+			amount,
+			currency,
+			quantity,
+			unit,
+			animal_code,
+			lot_code,
+			paddock_code,
+			counterparty_name,
+			status,
+			confirmed_by_user,
+			confirmed_at,
+			created_at,
+			updated_at
+		FROM business_events
+		WHERE farm_id = $1
+			AND category = $2
+			AND subcategory = $3
+			AND status = 'confirmed'
+		ORDER BY COALESCE(occurred_at, confirmed_at, created_at) DESC
+		LIMIT $4`,
+		farmID,
+		category,
+		subcategory,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recent confirmed events by intent: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]agro.BusinessEvent, 0, limit)
+	for rows.Next() {
+		var (
+			event       agro.BusinessEvent
+			occurredAt  sql.NullTime
+			amount      sql.NullFloat64
+			quantity    sql.NullFloat64
+			confirmedAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&event.ID,
+			&event.FarmID,
+			&event.SourceMessageID,
+			&event.InterpretationRunID,
+			&event.Category,
+			&event.Subcategory,
+			&occurredAt,
+			&event.Description,
+			&amount,
+			&event.Currency,
+			&quantity,
+			&event.Unit,
+			&event.AnimalCode,
+			&event.LotCode,
+			&event.PaddockCode,
+			&event.CounterpartyName,
+			&event.Status,
+			&event.ConfirmedByUser,
+			&confirmedAt,
+			&event.CreatedAt,
+			&event.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan recent confirmed event by intent: %w", err)
+		}
+		if occurredAt.Valid {
+			timestamp := occurredAt.Time
+			event.OccurredAt = &timestamp
+		}
+		if amount.Valid {
+			value := amount.Float64
+			event.Amount = &value
+		}
+		if quantity.Valid {
+			value := quantity.Float64
+			event.Quantity = &value
+		}
+		if confirmedAt.Valid {
+			timestamp := confirmedAt.Time
+			event.ConfirmedAt = &timestamp
+		}
+		result = append(result, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent confirmed events by intent: %w", err)
+	}
+
+	return result, nil
+}
+
 func (r *BusinessEventRepository) ListActiveMilkWithdrawalAnimals(ctx context.Context, farmID string, reference time.Time) ([]agro.MilkWithdrawalAnimal, error) {
 	rows, err := r.database.QueryContext(
 		ctx,

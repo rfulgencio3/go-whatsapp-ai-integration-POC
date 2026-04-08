@@ -11,6 +11,7 @@ import (
 
 type ReplyFormatter interface {
 	BuildConfirmedReply(event domain.BusinessEvent) string
+	BuildPostConfirmationReply(event domain.BusinessEvent, recent []domain.BusinessEvent, includeCorrelatedExpensePrompt bool) string
 	BuildHelpReply(topic helpTopic, registered bool) string
 	BuildOnboardingHelpReply(step domain.OnboardingStep) string
 	BuildHealthTreatmentHelpReply(state domain.HealthTreatmentState) string
@@ -76,6 +77,10 @@ type defaultReplyFormatter struct{}
 
 func (defaultReplyFormatter) BuildConfirmedReply(event domain.BusinessEvent) string {
 	return buildConfirmedReply(event)
+}
+
+func (defaultReplyFormatter) BuildPostConfirmationReply(event domain.BusinessEvent, recent []domain.BusinessEvent, includeCorrelatedExpensePrompt bool) string {
+	return buildPostConfirmationReply(event, recent, includeCorrelatedExpensePrompt)
 }
 
 func (defaultReplyFormatter) BuildHelpReply(topic helpTopic, registered bool) string {

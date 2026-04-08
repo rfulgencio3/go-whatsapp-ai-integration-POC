@@ -68,6 +68,7 @@ type BusinessEventRepository interface {
 	Create(ctx context.Context, event *domain.BusinessEvent) error
 	CreateAttributes(ctx context.Context, eventID string, attributes map[string]string) error
 	FindByID(ctx context.Context, eventID string) (domain.BusinessEvent, bool, error)
+	ListRecentConfirmedByIntent(ctx context.Context, farmID, category, subcategory string, limit int) ([]domain.BusinessEvent, error)
 	ListActiveMilkWithdrawalAnimals(ctx context.Context, farmID string, reference time.Time) ([]domain.MilkWithdrawalAnimal, error)
 	ListRecentHealthTreatments(ctx context.Context, farmID string, limit int) ([]domain.HealthTreatmentSummary, error)
 	SumMedicineExpensesForMonth(ctx context.Context, farmID string, periodStart, periodEnd time.Time) (float64, error)

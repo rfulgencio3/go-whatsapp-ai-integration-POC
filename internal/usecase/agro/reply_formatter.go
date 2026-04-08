@@ -23,6 +23,24 @@ func buildConfirmedReply(event domain.BusinessEvent) string {
 	}
 }
 
+func buildPostConfirmationReply(event domain.BusinessEvent, recent []domain.BusinessEvent, includeCorrelatedExpensePrompt bool) string {
+	lines := []string{buildConfirmedReply(event), "Resumo salvo:"}
+	lines = append(lines, buildEventSummaryLines(event)...)
+
+	if len(recent) > 0 {
+		lines = append(lines, "Top 5 mais recentes dessa categoria:")
+		for index, item := range recent {
+			lines = append(lines, fmt.Sprintf("%d. %s", index+1, buildRecentEventLine(item)))
+		}
+	}
+
+	if includeCorrelatedExpensePrompt {
+		lines = append(lines, "Deseja lancar tambem os gastos com medicamento, consulta veterinaria e exames? Responda SIM ou NAO.")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func buildHelpReply(topic helpTopic, registered bool) string {
 	lines := []string{"Posso te ajudar com registros e consultas objetivas da fazenda."}
 
@@ -375,6 +393,76 @@ func buildConfirmationDetail(result InterpretationResult) string {
 	default:
 		return ""
 	}
+}
+
+func buildEventSummaryLines(event domain.BusinessEvent) []string {
+	lines := []string{fmt.Sprintf("Categoria: %s", humanCategoryLabel(event.Category, event.Subcategory))}
+	if detail := buildEventDetail(event); detail != "" {
+		lines = append(lines, strings.Split(detail, "\n")...)
+	}
+	if event.Amount != nil {
+		lines = append(lines, fmt.Sprintf("Valor: %s", formatCurrency(event.Amount, event.Currency)))
+	}
+	if event.Quantity != nil {
+		lines = append(lines, fmt.Sprintf("Quantidade: %s", formatQuantity(event.Quantity, event.Unit)))
+	}
+	if occurredAt := formatOccurredAt(event.OccurredAt); occurredAt != "" {
+		lines = append(lines, fmt.Sprintf("Data: %s", occurredAt))
+	}
+	return lines
+}
+
+func buildEventDetail(event domain.BusinessEvent) string {
+	switch {
+	case event.Category == "health":
+		return buildHealthEventDetail(event)
+	case strings.TrimSpace(event.Description) != "":
+		if event.Category == "reproduction" && event.Subcategory == "insemination" {
+			return fmt.Sprintf("Evento: %s", strings.TrimSpace(event.Description))
+		}
+		return fmt.Sprintf("Descricao: %s", strings.TrimSpace(event.Description))
+	default:
+		return ""
+	}
+}
+
+func buildHealthEventDetail(event domain.BusinessEvent) string {
+	lines := make([]string, 0, 4)
+	if strings.TrimSpace(event.AnimalCode) != "" {
+		lines = append(lines, fmt.Sprintf("Animal: %s", strings.TrimSpace(event.AnimalCode)))
+	}
+	switch event.Subcategory {
+	case "mastitis_treatment":
+		lines = append(lines, "Problema: teta/mastite")
+	case "hoof_treatment":
+		lines = append(lines, "Problema: casco/manqueira")
+	case "bloat":
+		lines = append(lines, "Problema: gases/timpanismo")
+	}
+	if strings.TrimSpace(event.Description) != "" {
+		lines = append(lines, fmt.Sprintf("Descricao: %s", strings.TrimSpace(event.Description)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildRecentEventLine(event domain.BusinessEvent) string {
+	parts := []string{humanCategoryLabel(event.Category, event.Subcategory)}
+	switch {
+	case event.Category == "health" && strings.TrimSpace(event.AnimalCode) != "":
+		parts = append(parts, "Animal "+strings.TrimSpace(event.AnimalCode))
+	case strings.TrimSpace(event.Description) != "":
+		parts = append(parts, strings.TrimSpace(event.Description))
+	}
+	if event.Amount != nil {
+		parts = append(parts, formatCurrency(event.Amount, event.Currency))
+	}
+	if event.Quantity != nil {
+		parts = append(parts, formatQuantity(event.Quantity, event.Unit))
+	}
+	if occurredAt := formatOccurredAt(event.OccurredAt); occurredAt != "" {
+		parts = append(parts, occurredAt)
+	}
+	return strings.Join(parts, " | ")
 }
 
 func buildHealthConfirmationDetail(result InterpretationResult, description string) string {
