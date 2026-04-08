@@ -6,6 +6,7 @@ import (
 
 	domain "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/agro"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/usecase/chatbot"
 )
 
 type ReplyFormatter interface {
@@ -18,6 +19,8 @@ type ReplyFormatter interface {
 	BuildSelectedContextReply(farmName string) string
 	BuildAlreadyRegisteredReply() string
 	BuildDraftConfirmationPrompt(event domain.BusinessEvent) string
+	BuildDraftConfirmationPromptFromInterpretation(result InterpretationResult) string
+	BuildHealthTreatmentQuestion(state domain.HealthTreatmentState) string
 }
 
 type WorkflowRouter interface {
@@ -35,6 +38,10 @@ type CapturePersistence interface {
 	PersistInterpretation(ctx context.Context, farmID string, sourceMessage domain.SourceMessage, transcriptionID string, occurredAt time.Time) (domain.BusinessEvent, bool, error)
 	PersistLegacyConversation(ctx context.Context, phoneNumber string, userMessage, assistantMessage chat.Message) error
 	BuildChatMessageFromIncoming(incomingMessage chat.IncomingMessage, text string) chat.Message
+}
+
+type HealthTreatmentFlow interface {
+	HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error)
 }
 
 type defaultReplyFormatter struct{}
@@ -73,6 +80,14 @@ func (defaultReplyFormatter) BuildAlreadyRegisteredReply() string {
 
 func (defaultReplyFormatter) BuildDraftConfirmationPrompt(event domain.BusinessEvent) string {
 	return buildDraftConfirmationPrompt(event)
+}
+
+func (defaultReplyFormatter) BuildDraftConfirmationPromptFromInterpretation(result InterpretationResult) string {
+	return buildDraftConfirmationPromptFromInterpretation(result)
+}
+
+func (defaultReplyFormatter) BuildHealthTreatmentQuestion(state domain.HealthTreatmentState) string {
+	return buildHealthTreatmentQuestion(state)
 }
 
 type defaultWorkflowRouter struct{}

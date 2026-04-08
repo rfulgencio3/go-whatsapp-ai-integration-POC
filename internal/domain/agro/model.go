@@ -127,6 +127,30 @@ type OnboardingState struct {
 	UpdatedAt    time.Time
 }
 
+type HealthTreatmentStep string
+
+const (
+	HealthTreatmentStepAwaitingDiagnosisDate HealthTreatmentStep = "awaiting_diagnosis_date"
+	HealthTreatmentStepAwaitingMedicine      HealthTreatmentStep = "awaiting_medicine"
+	HealthTreatmentStepAwaitingTreatmentDays HealthTreatmentStep = "awaiting_treatment_days"
+)
+
+type HealthTreatmentState struct {
+	PhoneNumber         string
+	FarmID              string
+	Category            string
+	Subcategory         string
+	AnimalCode          string
+	Description         string
+	Attributes          map[string]string
+	DiagnosisDateText   string
+	DiagnosisOccurredAt *time.Time
+	Medicine            string
+	TreatmentDays       int
+	Step                HealthTreatmentStep
+	UpdatedAt           time.Time
+}
+
 type OnboardingMessage struct {
 	ID                string
 	PhoneNumber       string

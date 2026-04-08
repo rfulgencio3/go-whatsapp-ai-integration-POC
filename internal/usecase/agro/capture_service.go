@@ -17,6 +17,7 @@ type CaptureService struct {
 	replyFormatter     ReplyFormatter
 	workflowRouter     WorkflowRouter
 	persistence        CapturePersistence
+	healthFlow         HealthTreatmentFlow
 	chatHistory        chatbot.ConversationRepository
 	messageArchive     chatbot.MessageArchive
 	interpreter        Interpreter
@@ -24,6 +25,7 @@ type CaptureService struct {
 	farmRegistrations  FarmRegistrationRepository
 	phoneContexts      PhoneContextStateRepository
 	onboardingStates   OnboardingStateRepository
+	healthStates       HealthTreatmentStateRepository
 	onboardingMessages OnboardingMessageRepository
 	conversations      ConversationRepository
 	sourceMessages     SourceMessageRepository
@@ -103,6 +105,11 @@ func NewCaptureService(
 	}
 }
 
+func (s *CaptureService) SetHealthTreatmentStateRepository(repository HealthTreatmentStateRepository) {
+	s.healthStates = repository
+	s.healthFlow = newDefaultHealthTreatmentFlow(s)
+}
+
 func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (chatbot.ProcessResult, error) {
 	if s.downstream == nil {
 		return chatbot.ProcessResult{}, nil
@@ -137,6 +144,15 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		}
 		if handled {
 			return result, nil
+		}
+		if s.healthFlow != nil {
+			handled, result, err = s.healthFlow.HandleIncomingMessage(ctx, membership, message)
+			if err != nil {
+				return chatbot.ProcessResult{}, err
+			}
+			if handled {
+				return result, nil
+			}
 		}
 	}
 

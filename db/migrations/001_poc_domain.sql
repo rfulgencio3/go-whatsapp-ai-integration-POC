@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS onboarding_states (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS health_treatment_states (
+    phone_number TEXT PRIMARY KEY,
+    farm_id UUID NOT NULL REFERENCES farms(id),
+    category TEXT NOT NULL,
+    subcategory TEXT NOT NULL,
+    animal_code TEXT,
+    description TEXT NOT NULL,
+    attributes JSONB,
+    diagnosis_date_text TEXT,
+    diagnosis_occurred_at TIMESTAMPTZ,
+    medicine TEXT,
+    treatment_days INTEGER,
+    step TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS onboarding_messages (
     id UUID PRIMARY KEY,
     phone_number TEXT NOT NULL,

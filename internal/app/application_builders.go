@@ -158,7 +158,7 @@ func buildMessageProcessor(
 		return messageProcessor
 	}
 
-	return agrousecase.NewCaptureService(
+	captureService := agrousecase.NewCaptureService(
 		logger,
 		chatbotService,
 		messageSender,
@@ -177,4 +177,6 @@ func buildMessageProcessor(
 		storagepostgres.NewAssistantMessageRepository(database),
 		storagepostgres.NewOnboardingMessageRepository(database),
 	)
+	captureService.SetHealthTreatmentStateRepository(storagepostgres.NewHealthTreatmentStateRepository(database))
+	return captureService
 }

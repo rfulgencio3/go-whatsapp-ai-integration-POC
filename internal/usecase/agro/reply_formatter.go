@@ -60,6 +60,19 @@ func buildAlreadyRegisteredReply() string {
 	return "Seu numero ja esta cadastrado. Pode enviar seus registros normalmente."
 }
 
+func buildHealthTreatmentQuestion(state domain.HealthTreatmentState) string {
+	switch state.Step {
+	case domain.HealthTreatmentStepAwaitingDiagnosisDate:
+		return "Qual a data do diagnostico?"
+	case domain.HealthTreatmentStepAwaitingMedicine:
+		return "Qual o medicamento?"
+	case domain.HealthTreatmentStepAwaitingTreatmentDays:
+		return "Quantos dias de tratamento?"
+	default:
+		return "Envie as informacoes do tratamento."
+	}
+}
+
 func fallbackFarmName(option domain.PhoneContextOption, position int) string {
 	if strings.TrimSpace(option.FarmName) != "" {
 		return strings.TrimSpace(option.FarmName)
@@ -169,6 +182,15 @@ func buildHealthConfirmationDetail(result InterpretationResult, description stri
 		}
 		if strings.EqualFold(strings.TrimSpace(result.Attributes["milk_withdrawal"]), "true") {
 			lines = append(lines, "Restricao: nao tirar leite")
+		}
+		if diagnosisDate := strings.TrimSpace(result.Attributes["diagnosis_date"]); diagnosisDate != "" {
+			lines = append(lines, fmt.Sprintf("Data do diagnostico: %s", diagnosisDate))
+		}
+		if medicine := strings.TrimSpace(result.Attributes["medicine"]); medicine != "" {
+			lines = append(lines, fmt.Sprintf("Medicamento: %s", medicine))
+		}
+		if treatmentDays := strings.TrimSpace(result.Attributes["treatment_days"]); treatmentDays != "" {
+			lines = append(lines, fmt.Sprintf("Dias de tratamento: %s", treatmentDays))
 		}
 	}
 	if description != "" {

@@ -2,6 +2,7 @@ package agro
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,43 @@ func (s *stubOnboardingStateRepository) Upsert(_ context.Context, state *domain.
 }
 
 func (s *stubOnboardingStateRepository) DeleteByPhoneNumber(_ context.Context, phoneNumber string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states != nil {
+		delete(s.states, domain.NormalizePhoneNumber(phoneNumber))
+	}
+	return nil
+}
+
+type stubHealthTreatmentStateRepository struct {
+	states map[string]domain.HealthTreatmentState
+	err    error
+}
+
+func (s *stubHealthTreatmentStateRepository) GetByPhoneNumber(_ context.Context, phoneNumber string) (domain.HealthTreatmentState, bool, error) {
+	if s.err != nil {
+		return domain.HealthTreatmentState{}, false, s.err
+	}
+	if s.states == nil {
+		return domain.HealthTreatmentState{}, false, nil
+	}
+	state, ok := s.states[domain.NormalizePhoneNumber(phoneNumber)]
+	return state, ok, nil
+}
+
+func (s *stubHealthTreatmentStateRepository) Upsert(_ context.Context, state *domain.HealthTreatmentState) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states == nil {
+		s.states = make(map[string]domain.HealthTreatmentState)
+	}
+	s.states[domain.NormalizePhoneNumber(state.PhoneNumber)] = *state
+	return nil
+}
+
+func (s *stubHealthTreatmentStateRepository) DeleteByPhoneNumber(_ context.Context, phoneNumber string) error {
 	if s.err != nil {
 		return s.err
 	}
@@ -1356,5 +1394,176 @@ func TestBuildDraftConfirmationPromptFromInterpretationHealth(t *testing.T) {
 	expected := "Categoria: Saude animal\nAnimal: 32\nProblema: teta/mastite\nTetas afetadas: T1,T3\nRestricao: nao tirar leite\nDescricao: A vaca 32 esta com problema nas tetas T1 e T3 e nao pode tirar leite\nResponda SIM para confirmar ou NAO para corrigir."
 	if prompt != expected {
 		t.Fatalf("unexpected health confirmation prompt:\n%s", prompt)
+	}
+}
+
+func TestCaptureServiceStartsHealthTreatmentFlow(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	processor := &countingMessageProcessor{}
+	healthStates := &stubHealthTreatmentStateRepository{}
+
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "553488283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+	service.SetHealthTreatmentStateRepository(healthStates)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-health-1",
+		PhoneNumber: "5534988283531",
+		Text:        "A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d calls", processor.calls)
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound question, got %d", sender.sendCount)
+	}
+	if sender.lastBody != "Qual a data do diagnostico?" {
+		t.Fatalf("unexpected health question: %q", sender.lastBody)
+	}
+
+	state, found, _ := healthStates.GetByPhoneNumber(context.Background(), "5534988283531")
+	if !found {
+		t.Fatalf("expected health treatment state to be persisted")
+	}
+	if state.Step != domain.HealthTreatmentStepAwaitingDiagnosisDate {
+		t.Fatalf("expected awaiting diagnosis date step, got %q", state.Step)
+	}
+	if state.AnimalCode != "32" {
+		t.Fatalf("expected animal code 32, got %q", state.AnimalCode)
+	}
+	if got := result.AssistantMessage.Text; got != "Qual a data do diagnostico?" {
+		t.Fatalf("unexpected assistant message %q", got)
+	}
+}
+
+func TestCaptureServiceCompletesHealthTreatmentFlow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	interpretationRuns := &stubInterpretationRunRepository{}
+	businessEvents := &stubBusinessEventRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	healthStates := &stubHealthTreatmentStateRepository{
+		states: map[string]domain.HealthTreatmentState{
+			"5534988283531": {
+				PhoneNumber: "5534988283531",
+				FarmID:      "farm-1",
+				Category:    "health",
+				Subcategory: "mastitis_treatment",
+				AnimalCode:  "32",
+				Description: "A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+				Attributes: map[string]string{
+					"affected_teats":    "T3",
+					"milk_withdrawal":   "true",
+					"health_issue_type": "teta",
+				},
+				DiagnosisDateText:   "hoje",
+				DiagnosisOccurredAt: &now,
+				Medicine:            "Mastclin",
+				Step:                domain.HealthTreatmentStepAwaitingTreatmentDays,
+				UpdatedAt:           now,
+			},
+		},
+	}
+
+	service := NewCaptureService(
+		nil,
+		&countingMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		interpretationRuns,
+		businessEvents,
+		assistantMessages,
+	)
+	service.SetHealthTreatmentStateRepository(healthStates)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-health-2",
+		PhoneNumber: "5534988283531",
+		Text:        "5 dias",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if len(businessEvents.events) != 1 {
+		t.Fatalf("expected one health business event, got %d", len(businessEvents.events))
+	}
+	event := businessEvents.events[0]
+	if event.Category != "health" || event.Subcategory != "mastitis_treatment" {
+		t.Fatalf("unexpected event category/subcategory: %s/%s", event.Category, event.Subcategory)
+	}
+	if conversations.conversation.PendingConfirmationEventID != event.ID {
+		t.Fatalf("expected pending confirmation event %q, got %q", event.ID, conversations.conversation.PendingConfirmationEventID)
+	}
+	if attrs := businessEvents.attributes[event.ID]; attrs["medicine"] != "Mastclin" || attrs["treatment_days"] != "5" || attrs["diagnosis_date"] != "hoje" {
+		t.Fatalf("unexpected health attributes: %#v", attrs)
+	}
+	if _, found, _ := healthStates.GetByPhoneNumber(context.Background(), "5534988283531"); found {
+		t.Fatalf("expected health treatment state to be deleted after completion")
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one confirmation prompt, got %d", sender.sendCount)
+	}
+	if !strings.Contains(sender.lastBody, "Medicamento: Mastclin") || !strings.Contains(sender.lastBody, "Dias de tratamento: 5") {
+		t.Fatalf("unexpected confirmation prompt:\n%s", sender.lastBody)
+	}
+	if result.AssistantReplyKind != chatbot.ReplyKindConfirmation {
+		t.Fatalf("expected confirmation reply kind, got %q", result.AssistantReplyKind)
 	}
 }

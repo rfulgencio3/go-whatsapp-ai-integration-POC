@@ -30,6 +30,12 @@ type OnboardingStateRepository interface {
 	DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error
 }
 
+type HealthTreatmentStateRepository interface {
+	GetByPhoneNumber(ctx context.Context, phoneNumber string) (domain.HealthTreatmentState, bool, error)
+	Upsert(ctx context.Context, state *domain.HealthTreatmentState) error
+	DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error
+}
+
 type OnboardingMessageRepository interface {
 	Create(ctx context.Context, message *domain.OnboardingMessage) error
 }

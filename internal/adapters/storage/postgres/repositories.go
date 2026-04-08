@@ -33,6 +33,10 @@ type OnboardingStateRepository struct {
 	database *sql.DB
 }
 
+type HealthTreatmentStateRepository struct {
+	database *sql.DB
+}
+
 type OnboardingMessageRepository struct {
 	database *sql.DB
 }
@@ -75,6 +79,10 @@ func NewPhoneContextStateRepository(database *sql.DB) *PhoneContextStateReposito
 
 func NewOnboardingStateRepository(database *sql.DB) *OnboardingStateRepository {
 	return &OnboardingStateRepository{database: database}
+}
+
+func NewHealthTreatmentStateRepository(database *sql.DB) *HealthTreatmentStateRepository {
+	return &HealthTreatmentStateRepository{database: database}
 }
 
 func NewOnboardingMessageRepository(database *sql.DB) *OnboardingMessageRepository {
@@ -386,6 +394,163 @@ func (r *OnboardingStateRepository) DeleteByPhoneNumber(ctx context.Context, pho
 	)
 	if err != nil {
 		return fmt.Errorf("delete onboarding state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *HealthTreatmentStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.HealthTreatmentState, bool, error) {
+	var state agro.HealthTreatmentState
+	var attributesRaw []byte
+	var animalCode sql.NullString
+	var diagnosisDateText sql.NullString
+	var diagnosisOccurredAt sql.NullTime
+	var medicine sql.NullString
+	var treatmentDays sql.NullInt64
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
+
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT
+			phone_number,
+			farm_id,
+			category,
+			subcategory,
+			animal_code,
+			description,
+			attributes,
+			diagnosis_date_text,
+			diagnosis_occurred_at,
+			medicine,
+			treatment_days,
+			step,
+			updated_at
+		FROM health_treatment_states
+		WHERE phone_number IN ($1, $2)
+		ORDER BY CASE WHEN phone_number = $1 THEN 0 ELSE 1 END
+		LIMIT 1`,
+		primaryPhone,
+		secondaryPhone,
+	).Scan(
+		&state.PhoneNumber,
+		&state.FarmID,
+		&state.Category,
+		&state.Subcategory,
+		&animalCode,
+		&state.Description,
+		&attributesRaw,
+		&diagnosisDateText,
+		&diagnosisOccurredAt,
+		&medicine,
+		&treatmentDays,
+		&state.Step,
+		&state.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.HealthTreatmentState{}, false, nil
+	}
+	if err != nil {
+		return agro.HealthTreatmentState{}, false, fmt.Errorf("query health treatment state: %w", err)
+	}
+	if animalCode.Valid {
+		state.AnimalCode = animalCode.String
+	}
+	if len(attributesRaw) > 0 {
+		if err := json.Unmarshal(attributesRaw, &state.Attributes); err != nil {
+			return agro.HealthTreatmentState{}, false, fmt.Errorf("decode health treatment attributes: %w", err)
+		}
+	}
+	if diagnosisDateText.Valid {
+		state.DiagnosisDateText = diagnosisDateText.String
+	}
+	if diagnosisOccurredAt.Valid {
+		timestamp := diagnosisOccurredAt.Time
+		state.DiagnosisOccurredAt = &timestamp
+	}
+	if medicine.Valid {
+		state.Medicine = medicine.String
+	}
+	if treatmentDays.Valid {
+		state.TreatmentDays = int(treatmentDays.Int64)
+	}
+
+	return state, true, nil
+}
+
+func (r *HealthTreatmentStateRepository) Upsert(ctx context.Context, state *agro.HealthTreatmentState) error {
+	if state == nil {
+		return fmt.Errorf("upsert health treatment state: nil state")
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+
+	attributesRaw, err := json.Marshal(state.Attributes)
+	if err != nil {
+		return fmt.Errorf("encode health treatment attributes: %w", err)
+	}
+
+	_, err = r.database.ExecContext(
+		ctx,
+		`INSERT INTO health_treatment_states (
+			phone_number,
+			farm_id,
+			category,
+			subcategory,
+			animal_code,
+			description,
+			attributes,
+			diagnosis_date_text,
+			diagnosis_occurred_at,
+			medicine,
+			treatment_days,
+			step,
+			updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		ON CONFLICT (phone_number) DO UPDATE
+		SET farm_id = EXCLUDED.farm_id,
+			category = EXCLUDED.category,
+			subcategory = EXCLUDED.subcategory,
+			animal_code = EXCLUDED.animal_code,
+			description = EXCLUDED.description,
+			attributes = EXCLUDED.attributes,
+			diagnosis_date_text = EXCLUDED.diagnosis_date_text,
+			diagnosis_occurred_at = EXCLUDED.diagnosis_occurred_at,
+			medicine = EXCLUDED.medicine,
+			treatment_days = EXCLUDED.treatment_days,
+			step = EXCLUDED.step,
+			updated_at = EXCLUDED.updated_at`,
+		agro.NormalizePhoneNumber(state.PhoneNumber),
+		state.FarmID,
+		state.Category,
+		state.Subcategory,
+		nullIfEmpty(strings.TrimSpace(state.AnimalCode)),
+		state.Description,
+		attributesRaw,
+		nullIfEmpty(strings.TrimSpace(state.DiagnosisDateText)),
+		nullTime(state.DiagnosisOccurredAt),
+		nullIfEmpty(strings.TrimSpace(state.Medicine)),
+		nullInt(state.TreatmentDays),
+		string(state.Step),
+		state.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert health treatment state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *HealthTreatmentStateRepository) DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error {
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
+	_, err := r.database.ExecContext(
+		ctx,
+		`DELETE FROM health_treatment_states WHERE phone_number IN ($1, $2)`,
+		primaryPhone,
+		secondaryPhone,
+	)
+	if err != nil {
+		return fmt.Errorf("delete health treatment state: %w", err)
 	}
 
 	return nil
@@ -979,6 +1144,14 @@ func nullFloat64(value *float64) any {
 	}
 
 	return *value
+}
+
+func nullInt(value int) any {
+	if value == 0 {
+		return nil
+	}
+
+	return value
 }
 
 func phoneLookupVariants(phoneNumber string) (string, string) {
