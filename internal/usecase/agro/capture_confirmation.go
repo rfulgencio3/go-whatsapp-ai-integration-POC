@@ -31,10 +31,10 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, member
 	sourceMessage := domain.SourceMessage{
 		ID:                uuid.NewString(),
 		ConversationID:    conversation.ID,
-		Provider:          providerOrDefault(result.IncomingMessage.Provider),
+		Provider:          s.persistence.ProviderOrDefault(result.IncomingMessage.Provider),
 		ProviderMessageID: strings.TrimSpace(result.IncomingMessage.MessageID),
 		SenderPhoneNumber: phoneNumber,
-		MessageType:       toDomainMessageType(result.IncomingMessage.Type),
+		MessageType:       s.persistence.ToDomainMessageType(result.IncomingMessage.Type),
 		RawText:           strings.TrimSpace(result.IncomingMessage.Text),
 		ReceivedAt:        receivedAt,
 		CreatedAt:         receivedAt,
@@ -48,11 +48,11 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, member
 	if err := s.sourceMessages.Create(ctx, &sourceMessage); err != nil {
 		return err
 	}
-	transcriptionID, err := s.persistTranscription(ctx, sourceMessage.ID, result.IncomingMessage, receivedAt)
+	transcriptionID, err := s.persistence.PersistTranscription(ctx, sourceMessage.ID, result.IncomingMessage, receivedAt)
 	if err != nil {
 		return err
 	}
-	event, requiresConfirmation, err := s.persistInterpretation(ctx, membership.FarmID, sourceMessage, transcriptionID, receivedAt)
+	event, requiresConfirmation, err := s.persistence.PersistInterpretation(ctx, membership.FarmID, sourceMessage, transcriptionID, receivedAt)
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (s *CaptureService) captureProcessedInteraction(ctx context.Context, member
 	if result.AssistantReplyKind == chatbot.ReplyKindConfirmation {
 		replyType = domain.ReplyTypeConfirmation
 	}
-	if err := s.persistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, result.AssistantMessage, replyType, receivedAt); err != nil {
+	if err := s.persistence.PersistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, result.AssistantMessage, replyType, receivedAt); err != nil {
 		return err
 	}
 	if requiresConfirmation {
@@ -91,7 +91,7 @@ func (s *CaptureService) sendDraftConfirmationPrompt(ctx context.Context, phoneN
 	}
 	assistantMessage := chat.Message{
 		Role:      chat.AssistantRole,
-		Text:      buildDraftConfirmationPrompt(event),
+		Text:      s.replyFormatter.BuildDraftConfirmationPrompt(event),
 		CreatedAt: createdAt,
 		Type:      chat.MessageTypeText,
 		Provider:  "whatsapp",
@@ -107,7 +107,7 @@ func (s *CaptureService) sendDraftConfirmationPrompt(ctx context.Context, phoneN
 			return err
 		}
 	}
-	if err := s.persistAssistantMessage(ctx, conversationID, sourceMessageID, assistantMessage, domain.ReplyTypeConfirmation, createdAt); err != nil {
+	if err := s.persistence.PersistAssistantMessage(ctx, conversationID, sourceMessageID, assistantMessage, domain.ReplyTypeConfirmation, createdAt); err != nil {
 		return err
 	}
 
@@ -115,7 +115,7 @@ func (s *CaptureService) sendDraftConfirmationPrompt(ctx context.Context, phoneN
 }
 
 func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
-	decision := classifyConfirmationDecision(message.Text)
+	decision := s.workflowRouter.ClassifyConfirmationDecision(message.Text)
 	if decision == "" || s.businessEvents == nil || s.messageSender == nil || s.conversations == nil {
 		return false, chatbot.ProcessResult{}, nil
 	}
@@ -139,11 +139,11 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 	}
 	status := domain.EventStatusRejected
 	confirmedByUser := false
-	replyText := buildRejectedReply()
+	replyText := s.replyFormatter.BuildRejectedReply()
 	if decision == confirmationAccepted {
 		status = domain.EventStatusConfirmed
 		confirmedByUser = true
-		replyText = buildConfirmedReply(event)
+		replyText = s.replyFormatter.BuildConfirmedReply(event)
 	}
 	var confirmedAt *time.Time
 	if confirmedByUser {
@@ -175,18 +175,18 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 		return false, chatbot.ProcessResult{}, err
 	}
 
-	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
 	assistantMessage := chat.Message{
 		Role:      chat.AssistantRole,
 		Text:      replyText,
 		CreatedAt: now,
 		Type:      chat.MessageTypeText,
-		Provider:  providerOrDefault(message.Provider),
+		Provider:  s.persistence.ProviderOrDefault(message.Provider),
 	}
-	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+	if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
-	if err := s.persistAssistantMessage(ctx, savedConversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeConfirmation, now); err != nil {
+	if err := s.persistence.PersistAssistantMessage(ctx, savedConversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeConfirmation, now); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 
@@ -212,10 +212,10 @@ func (s *CaptureService) persistConfirmationInbound(ctx context.Context, members
 	sourceMessage := domain.SourceMessage{
 		ID:                uuid.NewString(),
 		ConversationID:    conversation.ID,
-		Provider:          providerOrDefault(message.Provider),
+		Provider:          s.persistence.ProviderOrDefault(message.Provider),
 		ProviderMessageID: strings.TrimSpace(message.MessageID),
 		SenderPhoneNumber: phoneNumber,
-		MessageType:       toDomainMessageType(message.Type),
+		MessageType:       s.persistence.ToDomainMessageType(message.Type),
 		RawText:           strings.TrimSpace(message.Text),
 		ReceivedAt:        receivedAt,
 		CreatedAt:         receivedAt,

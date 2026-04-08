@@ -14,6 +14,9 @@ type CaptureService struct {
 	logger             *observability.Logger
 	downstream         chatbot.MessageProcessor
 	messageSender      chatbot.MessageSender
+	replyFormatter     ReplyFormatter
+	workflowRouter     WorkflowRouter
+	persistence        CapturePersistence
 	chatHistory        chatbot.ConversationRepository
 	messageArchive     chatbot.MessageArchive
 	interpreter        Interpreter
@@ -69,9 +72,20 @@ func NewCaptureService(
 	}
 
 	return &CaptureService{
-		logger:             logger,
-		downstream:         downstream,
-		messageSender:      messageSender,
+		logger:         logger,
+		downstream:     downstream,
+		messageSender:  messageSender,
+		replyFormatter: defaultReplyFormatter{},
+		workflowRouter: defaultWorkflowRouter{},
+		persistence: newDefaultCapturePersistence(
+			chatHistory,
+			messageArchive,
+			interpreter,
+			transcriptions,
+			interpretationRuns,
+			businessEvents,
+			assistantMessages,
+		),
 		chatHistory:        chatHistory,
 		messageArchive:     messageArchive,
 		interpreter:        interpreter,

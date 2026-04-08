@@ -27,7 +27,7 @@ func (s *CaptureService) handleOnboarding(ctx context.Context, message chat.Inco
 	replyText := ""
 	traceStep := domain.OnboardingStep("")
 	switch {
-	case isOnboardingStartCommand(message.Text):
+	case s.workflowRouter.IsOnboardingStartCommand(message.Text):
 		replyText, traceStep, err = s.startOnboarding(ctx, normalizedPhone)
 	case found && state.Step == domain.OnboardingStepAwaitingProducerName:
 		replyText, traceStep, err = s.completeOnboardingProducerStep(ctx, state, message.Text)
@@ -45,15 +45,15 @@ func (s *CaptureService) handleOnboarding(ctx context.Context, message chat.Inco
 		return false, chatbot.ProcessResult{}, err
 	}
 
-	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
 	assistantMessage := chat.Message{
 		Role:      chat.AssistantRole,
 		Text:      replyText,
 		CreatedAt: now,
 		Type:      chat.MessageTypeText,
-		Provider:  providerOrDefault(message.Provider),
+		Provider:  s.persistence.ProviderOrDefault(message.Provider),
 	}
-	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+	if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 	if err := s.persistOnboardingInteraction(ctx, normalizedPhone, traceStep, message, assistantMessage, now); err != nil {
@@ -75,7 +75,7 @@ func (s *CaptureService) startOnboarding(ctx context.Context, phoneNumber string
 			return "", "", err
 		}
 		if len(memberships) > 0 {
-			return buildAlreadyRegisteredReply(), "", nil
+			return s.replyFormatter.BuildAlreadyRegisteredReply(), "", nil
 		}
 	}
 
@@ -141,9 +141,9 @@ func (s *CaptureService) persistOnboardingInteraction(ctx context.Context, phone
 			PhoneNumber:       phoneNumber,
 			Step:              step,
 			Direction:         domain.OnboardingMessageDirectionInbound,
-			Provider:          providerOrDefault(incomingMessage.Provider),
+			Provider:          s.persistence.ProviderOrDefault(incomingMessage.Provider),
 			ProviderMessageID: strings.TrimSpace(incomingMessage.MessageID),
-			MessageType:       toDomainMessageType(incomingMessage.Type),
+			MessageType:       s.persistence.ToDomainMessageType(incomingMessage.Type),
 			Body:              userBody,
 			CreatedAt:         createdAt,
 		}
@@ -162,7 +162,7 @@ func (s *CaptureService) persistOnboardingInteraction(ctx context.Context, phone
 		PhoneNumber: phoneNumber,
 		Step:        step,
 		Direction:   domain.OnboardingMessageDirectionOutbound,
-		Provider:    providerOrDefault(assistantMessage.Provider),
+		Provider:    s.persistence.ProviderOrDefault(assistantMessage.Provider),
 		MessageType: domain.MessageTypeText,
 		Body:        replyBody,
 		CreatedAt:   createdAt,

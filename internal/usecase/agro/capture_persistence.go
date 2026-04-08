@@ -35,8 +35,16 @@ func toDomainMessageType(messageType chat.MessageType) domain.MessageType {
 	}
 }
 
-func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessageID string, incomingMessage chat.IncomingMessage, createdAt time.Time) (string, error) {
-	if s.transcriptions == nil || strings.TrimSpace(incomingMessage.TranscriptionID) == "" {
+func (p *defaultCapturePersistence) ProviderOrDefault(provider string) string {
+	return providerOrDefault(provider)
+}
+
+func (p *defaultCapturePersistence) ToDomainMessageType(messageType chat.MessageType) domain.MessageType {
+	return toDomainMessageType(messageType)
+}
+
+func (p *defaultCapturePersistence) PersistTranscription(ctx context.Context, sourceMessageID string, incomingMessage chat.IncomingMessage, createdAt time.Time) (string, error) {
+	if p.transcriptions == nil || strings.TrimSpace(incomingMessage.TranscriptionID) == "" {
 		return "", nil
 	}
 
@@ -51,15 +59,15 @@ func (s *CaptureService) persistTranscription(ctx context.Context, sourceMessage
 		CreatedAt:       createdAt,
 	}
 
-	if err := s.transcriptions.Create(ctx, &transcription); err != nil {
+	if err := p.transcriptions.Create(ctx, &transcription); err != nil {
 		return "", err
 	}
 
 	return transcription.ID, nil
 }
 
-func (s *CaptureService) persistAssistantMessage(ctx context.Context, conversationID, sourceMessageID string, assistantMessage chat.Message, replyType domain.ReplyType, createdAt time.Time) error {
-	if s.assistantMessages == nil || strings.TrimSpace(assistantMessage.Text) == "" {
+func (p *defaultCapturePersistence) PersistAssistantMessage(ctx context.Context, conversationID, sourceMessageID string, assistantMessage chat.Message, replyType domain.ReplyType, createdAt time.Time) error {
+	if p.assistantMessages == nil || strings.TrimSpace(assistantMessage.Text) == "" {
 		return nil
 	}
 	if replyType == "" {
@@ -77,15 +85,15 @@ func (s *CaptureService) persistAssistantMessage(ctx context.Context, conversati
 		CreatedAt:         createdAt,
 	}
 
-	return s.assistantMessages.Create(ctx, &message)
+	return p.assistantMessages.Create(ctx, &message)
 }
 
-func (s *CaptureService) persistInterpretation(ctx context.Context, farmID string, sourceMessage domain.SourceMessage, transcriptionID string, occurredAt time.Time) (domain.BusinessEvent, bool, error) {
-	if s.interpreter == nil || s.interpretationRuns == nil {
+func (p *defaultCapturePersistence) PersistInterpretation(ctx context.Context, farmID string, sourceMessage domain.SourceMessage, transcriptionID string, occurredAt time.Time) (domain.BusinessEvent, bool, error) {
+	if p.interpreter == nil || p.interpretationRuns == nil {
 		return domain.BusinessEvent{}, false, nil
 	}
 
-	interpretation, err := s.interpreter.Interpret(ctx, InterpretationInput{
+	interpretation, err := p.interpreter.Interpret(ctx, InterpretationInput{
 		MessageType: sourceMessage.MessageType,
 		Text:        sourceMessage.RawText,
 		OccurredAt:  occurredAt,
@@ -110,10 +118,10 @@ func (s *CaptureService) persistInterpretation(ctx context.Context, farmID strin
 		RawOutputJSON:        interpretation.RawOutputJSON,
 		CreatedAt:            occurredAt,
 	}
-	if err := s.interpretationRuns.Create(ctx, &run); err != nil {
+	if err := p.interpretationRuns.Create(ctx, &run); err != nil {
 		return domain.BusinessEvent{}, false, err
 	}
-	if s.businessEvents == nil {
+	if p.businessEvents == nil {
 		return domain.BusinessEvent{}, false, nil
 	}
 
@@ -137,37 +145,37 @@ func (s *CaptureService) persistInterpretation(ctx context.Context, farmID strin
 		UpdatedAt:           occurredAt,
 	}
 
-	if err := s.businessEvents.Create(ctx, &event); err != nil {
+	if err := p.businessEvents.Create(ctx, &event); err != nil {
 		return domain.BusinessEvent{}, false, err
 	}
-	if err := s.businessEvents.CreateAttributes(ctx, event.ID, interpretation.Attributes); err != nil {
+	if err := p.businessEvents.CreateAttributes(ctx, event.ID, interpretation.Attributes); err != nil {
 		return domain.BusinessEvent{}, false, err
 	}
 
 	return event, interpretation.RequiresConfirmation, nil
 }
 
-func (s *CaptureService) persistLegacyConversation(ctx context.Context, phoneNumber string, userMessage, assistantMessage chat.Message) error {
-	if s.chatHistory == nil || s.messageArchive == nil {
+func (p *defaultCapturePersistence) PersistLegacyConversation(ctx context.Context, phoneNumber string, userMessage, assistantMessage chat.Message) error {
+	if p.chatHistory == nil || p.messageArchive == nil {
 		return nil
 	}
-	if err := s.chatHistory.AppendMessage(ctx, phoneNumber, userMessage); err != nil {
+	if err := p.chatHistory.AppendMessage(ctx, phoneNumber, userMessage); err != nil {
 		return err
 	}
-	if err := s.messageArchive.RecordMessage(ctx, phoneNumber, userMessage); err != nil {
+	if err := p.messageArchive.RecordMessage(ctx, phoneNumber, userMessage); err != nil {
 		return err
 	}
-	if err := s.chatHistory.AppendMessage(ctx, phoneNumber, assistantMessage); err != nil {
+	if err := p.chatHistory.AppendMessage(ctx, phoneNumber, assistantMessage); err != nil {
 		return err
 	}
-	if err := s.messageArchive.RecordMessage(ctx, phoneNumber, assistantMessage); err != nil {
+	if err := p.messageArchive.RecordMessage(ctx, phoneNumber, assistantMessage); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func buildChatMessageFromIncoming(incomingMessage chat.IncomingMessage, text string) chat.Message {
+func (p *defaultCapturePersistence) BuildChatMessageFromIncoming(incomingMessage chat.IncomingMessage, text string) chat.Message {
 	message := chat.Message{
 		Role:                  chat.UserRole,
 		Text:                  text,

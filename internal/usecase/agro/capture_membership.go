@@ -14,7 +14,7 @@ func (s *CaptureService) handleContextSwitchRequest(ctx context.Context, message
 	if s.messageSender == nil || s.farmMemberships == nil || s.phoneContexts == nil {
 		return false, chatbot.ProcessResult{}, nil
 	}
-	if !isContextSwitchCommand(message.Text) {
+	if !s.workflowRouter.IsContextSwitchCommand(message.Text) {
 		return false, chatbot.ProcessResult{}, nil
 	}
 
@@ -27,9 +27,9 @@ func (s *CaptureService) handleContextSwitchRequest(ctx context.Context, message
 	replyText := ""
 	switch len(memberships) {
 	case 0:
-		replyText = buildUnregisteredNumberReply()
+		replyText = s.replyFormatter.BuildUnregisteredNumberReply()
 	case 1:
-		replyText = buildSingleContextReply(memberships[0].FarmName)
+		replyText = s.replyFormatter.BuildSingleContextReply(memberships[0].FarmName)
 	default:
 		options := make([]domain.PhoneContextOption, 0, len(memberships))
 		for _, membership := range memberships {
@@ -45,7 +45,7 @@ func (s *CaptureService) handleContextSwitchRequest(ctx context.Context, message
 		}); err != nil {
 			return false, chatbot.ProcessResult{}, err
 		}
-		replyText = buildAmbiguousContextSelectionReply(options)
+		replyText = s.replyFormatter.BuildAmbiguousContextSelectionReply(options)
 	}
 
 	now := time.Now().UTC()
@@ -53,15 +53,15 @@ func (s *CaptureService) handleContextSwitchRequest(ctx context.Context, message
 		return false, chatbot.ProcessResult{}, err
 	}
 
-	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
 	assistantMessage := chat.Message{
 		Role:      chat.AssistantRole,
 		Text:      replyText,
 		CreatedAt: now,
 		Type:      chat.MessageTypeText,
-		Provider:  providerOrDefault(message.Provider),
+		Provider:  s.persistence.ProviderOrDefault(message.Provider),
 	}
-	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+	if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 
@@ -136,7 +136,7 @@ func (s *CaptureService) handleUnresolvedMembership(ctx context.Context, resolut
 	replyText := ""
 	switch resolution {
 	case membershipResolutionNotFound:
-		replyText = buildUnregisteredNumberReply()
+		replyText = s.replyFormatter.BuildUnregisteredNumberReply()
 	case membershipResolutionAmbiguous:
 		handled, responseText, err := s.handleAmbiguousMembershipSelection(ctx, normalizedPhone, message.Text)
 		if err != nil {
@@ -155,15 +155,15 @@ func (s *CaptureService) handleUnresolvedMembership(ctx context.Context, resolut
 		return false, chatbot.ProcessResult{}, err
 	}
 
-	userMessage := buildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
 	assistantMessage := chat.Message{
 		Role:      chat.AssistantRole,
 		Text:      replyText,
 		CreatedAt: now,
 		Type:      chat.MessageTypeText,
-		Provider:  providerOrDefault(message.Provider),
+		Provider:  s.persistence.ProviderOrDefault(message.Provider),
 	}
-	if err := s.persistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+	if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
 
@@ -177,7 +177,7 @@ func (s *CaptureService) handleUnresolvedMembership(ctx context.Context, resolut
 
 func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context, phoneNumber, text string) (bool, string, error) {
 	if s.farmMemberships == nil || s.phoneContexts == nil {
-		return true, buildAmbiguousContextReply(), nil
+		return true, s.replyFormatter.BuildAmbiguousContextReply(), nil
 	}
 
 	state, found, err := s.phoneContexts.GetByPhoneNumber(ctx, phoneNumber)
@@ -185,7 +185,7 @@ func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context,
 		return false, "", err
 	}
 	if found && len(state.PendingOptions) > 0 {
-		selection := parseContextSelection(text)
+		selection := s.workflowRouter.ParseContextSelection(text)
 		if selection >= 1 && selection <= len(state.PendingOptions) {
 			option := state.PendingOptions[selection-1]
 			state.ActiveFarmID = option.FarmID
@@ -195,7 +195,7 @@ func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context,
 				return false, "", err
 			}
 
-			return true, buildSelectedContextReply(option.FarmName), nil
+			return true, s.replyFormatter.BuildSelectedContextReply(option.FarmName), nil
 		}
 	}
 
@@ -204,7 +204,7 @@ func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context,
 		return false, "", err
 	}
 	if len(memberships) == 0 {
-		return true, buildUnregisteredNumberReply(), nil
+		return true, s.replyFormatter.BuildUnregisteredNumberReply(), nil
 	}
 
 	options := make([]domain.PhoneContextOption, 0, len(memberships))
@@ -223,5 +223,5 @@ func (s *CaptureService) handleAmbiguousMembershipSelection(ctx context.Context,
 		return false, "", err
 	}
 
-	return true, buildAmbiguousContextSelectionReply(options), nil
+	return true, s.replyFormatter.BuildAmbiguousContextSelectionReply(options), nil
 }
