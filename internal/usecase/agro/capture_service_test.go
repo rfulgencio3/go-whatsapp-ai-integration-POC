@@ -814,6 +814,116 @@ func TestCaptureServiceStartsOnboardingForUnregisteredPhoneNumber(t *testing.T) 
 	}
 }
 
+func TestCaptureServiceRepliesWithTreatmentHelpExamples(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-help-treatment-1",
+		PhoneNumber: "5511999999999",
+		Text:        "exemplos de tratamento",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one help reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Exemplos de tratamento:") {
+		t.Fatalf("unexpected treatment help reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "problema na teta T3") || !strings.Contains(result.AssistantMessage.Text, "problema de casco") {
+		t.Fatalf("expected treatment examples in help reply, got %q", result.AssistantMessage.Text)
+	}
+}
+
+func TestCaptureServiceRepliesWithQueryHelpExamples(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "msg-help-query-1",
+		PhoneNumber: "5511999999999",
+		Text:        "consultas disponiveis",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one help reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Consultas disponiveis:") {
+		t.Fatalf("unexpected query help reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Quais vacas nao podem tirar leite?") || !strings.Contains(result.AssistantMessage.Text, "Quais foram as ultimas compras?") {
+		t.Fatalf("expected query examples in help reply, got %q", result.AssistantMessage.Text)
+	}
+}
+
 func TestCaptureServiceCompletesOnboardingFlow(t *testing.T) {
 	t.Parallel()
 

@@ -3,10 +3,16 @@ package agro
 import "strings"
 
 type confirmationDecision string
+type helpTopic string
 
 const (
 	confirmationAccepted confirmationDecision = "accepted"
 	confirmationRejected confirmationDecision = "rejected"
+
+	helpTopicGeneral    helpTopic = "general"
+	helpTopicTreatments helpTopic = "treatments"
+	helpTopicPurchases  helpTopic = "purchases"
+	helpTopicQueries    helpTopic = "queries"
 )
 
 func classifyConfirmationDecision(text string) confirmationDecision {
@@ -52,11 +58,37 @@ func isOnboardingStartCommand(text string) bool {
 }
 
 func isHelpCommand(text string) bool {
-	switch normalizeText(text) {
-	case "ajuda", "help", "socorro", "o que posso registrar", "o que eu posso registrar", "exemplos", "quais consultas posso fazer", "como funciona":
-		return true
+	return parseHelpTopic(text) != ""
+}
+
+func parseHelpTopic(text string) helpTopic {
+	normalized := normalizeText(text)
+	switch normalized {
+	case "ajuda", "help", "socorro", "o que posso registrar", "o que eu posso registrar", "exemplos", "como funciona":
+		return helpTopicGeneral
+	case "consultas disponiveis", "quais consultas posso fazer", "quais consultas posso consultar":
+		return helpTopicQueries
+	case "exemplos de tratamento", "exemplo de tratamento", "como registrar tratamento", "como lancar tratamento":
+		return helpTopicTreatments
+	case "exemplos de compras", "exemplo de compra", "como registrar compra", "como lancar compra":
+		return helpTopicPurchases
+	}
+
+	switch {
+	case strings.Contains(normalized, "consulta") && strings.Contains(normalized, "disponiv"):
+		return helpTopicQueries
+	case strings.Contains(normalized, "quais consultas"):
+		return helpTopicQueries
+	case strings.Contains(normalized, "exemplo") && strings.Contains(normalized, "tratamento"):
+		return helpTopicTreatments
+	case strings.Contains(normalized, "registrar tratamento"):
+		return helpTopicTreatments
+	case strings.Contains(normalized, "exemplo") && strings.Contains(normalized, "compra"):
+		return helpTopicPurchases
+	case strings.Contains(normalized, "registrar compra"):
+		return helpTopicPurchases
 	default:
-		return false
+		return ""
 	}
 }
 

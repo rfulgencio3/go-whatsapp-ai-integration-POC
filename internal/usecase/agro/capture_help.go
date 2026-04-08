@@ -25,7 +25,7 @@ func (s *CaptureService) handleHelpRequest(ctx context.Context, message chat.Inc
 		registered = len(memberships) > 0
 	}
 
-	replyText := s.replyFormatter.BuildHelpReply(registered)
+	replyText := s.replyFormatter.BuildHelpReply(s.workflowRouter.ParseHelpTopic(message.Text), registered)
 	now := time.Now().UTC()
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
 		return false, chatbot.ProcessResult{}, err

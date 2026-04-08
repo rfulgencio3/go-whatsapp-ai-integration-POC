@@ -23,18 +23,47 @@ func buildConfirmedReply(event domain.BusinessEvent) string {
 	}
 }
 
-func buildHelpReply(registered bool) string {
-	lines := []string{
-		"Posso te ajudar com registros e consultas objetivas da fazenda.",
-		"Exemplos de registros:",
-		"- Comprei 10 sacos de racao por 850 reais",
-		"- A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
-		"Exemplos de consultas:",
-		"- Quais vacas nao podem tirar leite?",
-		"- Quais foram os ultimos tratamentos?",
-		"- Quanto gastei com medicamento esse mes?",
-		"- Quanto gastei com veterinario esse mes?",
-		"- Quais foram as ultimas compras?",
+func buildHelpReply(topic helpTopic, registered bool) string {
+	lines := []string{"Posso te ajudar com registros e consultas objetivas da fazenda."}
+
+	switch topic {
+	case helpTopicTreatments:
+		lines = append(lines,
+			"Exemplos de tratamento:",
+			"- A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+			"- A vaca 18 esta mancando por problema de casco",
+			"- A vaca 21 esta com gases e barriga inchada",
+			"Quando faltar algum dado, eu posso pedir data do diagnostico, medicamento e dias de tratamento.",
+		)
+	case helpTopicPurchases:
+		lines = append(lines,
+			"Exemplos de compras:",
+			"- Comprei 10 sacos de racao por 850 reais",
+			"- Compramos adubo por 1200 reais",
+			"- Adquiri 5 litros de herbicida por 430 reais",
+			"Se a mensagem estiver clara, eu monto um resumo para voce confirmar com SIM ou NAO.",
+		)
+	case helpTopicQueries:
+		lines = append(lines,
+			"Consultas disponiveis:",
+			"- Quais vacas nao podem tirar leite?",
+			"- Quais foram os ultimos tratamentos?",
+			"- Quanto gastei com medicamento esse mes?",
+			"- Quanto gastei com veterinario esse mes?",
+			"- Quais foram as ultimas compras?",
+		)
+	default:
+		lines = append(lines,
+			"Exemplos de registros:",
+			"- Comprei 10 sacos de racao por 850 reais",
+			"- A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+			"Exemplos de consultas:",
+			"- Quais vacas nao podem tirar leite?",
+			"- Quais foram os ultimos tratamentos?",
+			"- Quanto gastei com medicamento esse mes?",
+			"- Quanto gastei com veterinario esse mes?",
+			"- Quais foram as ultimas compras?",
+		)
 	}
 	if !registered {
 		lines = append(lines, "Se seu numero ainda nao estiver vinculado, responda CADASTRAR para iniciar o cadastro.")
