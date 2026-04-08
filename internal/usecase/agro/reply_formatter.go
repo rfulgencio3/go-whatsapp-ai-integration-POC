@@ -23,6 +23,44 @@ func buildConfirmedReply(event domain.BusinessEvent) string {
 	}
 }
 
+func buildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {
+	return buildConfirmedReply(event) + "\nVoce deseja lancar tambem os gastos com medicamento, consulta veterinaria e exames? Responda SIM ou NAO."
+}
+
+func buildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string {
+	switch state.Step {
+	case domain.CorrelatedExpenseStepAwaitingMedicineAmount:
+		return "Qual o valor gasto com medicamento? Se nao houve, responda 0."
+	case domain.CorrelatedExpenseStepAwaitingVetAmount:
+		return "Qual o valor da consulta veterinaria? Se nao houve, responda 0."
+	case domain.CorrelatedExpenseStepAwaitingExamAmount:
+		return "Qual o valor de exames? Se nao houve, responda 0."
+	default:
+		return "Deseja lancar os gastos relacionados? Responda SIM ou NAO."
+	}
+}
+
+func buildCorrelatedExpenseDeclinedReply() string {
+	return "Tudo bem. Nao vou lancar gastos relacionados a esse tratamento."
+}
+
+func buildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string {
+	lines := []string{"Gastos relacionados registrados:"}
+	if state.MedicineAmount != nil && *state.MedicineAmount > 0 {
+		lines = append(lines, fmt.Sprintf("Medicamento: %s", formatCurrency(state.MedicineAmount, "BRL")))
+	}
+	if state.VetAmount != nil && *state.VetAmount > 0 {
+		lines = append(lines, fmt.Sprintf("Consulta veterinaria: %s", formatCurrency(state.VetAmount, "BRL")))
+	}
+	if state.ExamAmount != nil && *state.ExamAmount > 0 {
+		lines = append(lines, fmt.Sprintf("Exames: %s", formatCurrency(state.ExamAmount, "BRL")))
+	}
+	if len(lines) == 1 {
+		return "Tudo certo. Nao registrei gastos relacionados para esse tratamento."
+	}
+	return strings.Join(lines, "\n")
+}
+
 func buildRejectedReply() string {
 	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
 }

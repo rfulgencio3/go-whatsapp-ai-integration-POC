@@ -173,6 +173,43 @@ func (s *stubHealthTreatmentStateRepository) DeleteByPhoneNumber(_ context.Conte
 	return nil
 }
 
+type stubCorrelatedExpenseStateRepository struct {
+	states map[string]domain.CorrelatedExpenseState
+	err    error
+}
+
+func (s *stubCorrelatedExpenseStateRepository) GetByPhoneNumber(_ context.Context, phoneNumber string) (domain.CorrelatedExpenseState, bool, error) {
+	if s.err != nil {
+		return domain.CorrelatedExpenseState{}, false, s.err
+	}
+	if s.states == nil {
+		return domain.CorrelatedExpenseState{}, false, nil
+	}
+	state, ok := s.states[domain.NormalizePhoneNumber(phoneNumber)]
+	return state, ok, nil
+}
+
+func (s *stubCorrelatedExpenseStateRepository) Upsert(_ context.Context, state *domain.CorrelatedExpenseState) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states == nil {
+		s.states = make(map[string]domain.CorrelatedExpenseState)
+	}
+	s.states[domain.NormalizePhoneNumber(state.PhoneNumber)] = *state
+	return nil
+}
+
+func (s *stubCorrelatedExpenseStateRepository) DeleteByPhoneNumber(_ context.Context, phoneNumber string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.states != nil {
+		delete(s.states, domain.NormalizePhoneNumber(phoneNumber))
+	}
+	return nil
+}
+
 type stubOnboardingMessageRepository struct {
 	messages []domain.OnboardingMessage
 	err      error
@@ -1565,5 +1602,190 @@ func TestCaptureServiceCompletesHealthTreatmentFlow(t *testing.T) {
 	}
 	if result.AssistantReplyKind != chatbot.ReplyKindConfirmation {
 		t.Fatalf("expected confirmation reply kind, got %q", result.AssistantReplyKind)
+	}
+}
+
+func TestCaptureServiceAsksForCorrelatedExpensesAfterHealthConfirmation(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:                         "conv-1",
+			FarmID:                     "farm-1",
+			PendingConfirmationEventID: "event-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		events: []domain.BusinessEvent{
+			{
+				ID:          "event-1",
+				FarmID:      "farm-1",
+				Category:    "health",
+				Subcategory: "mastitis_treatment",
+				AnimalCode:  "32",
+				Description: "A vaca 32 esta com problema na teta T3 e nao pode tirar leite",
+				Status:      domain.EventStatusDraft,
+			},
+		},
+	}
+	assistantMessages := &stubAssistantMessageRepository{}
+	correlatedStates := &stubCorrelatedExpenseStateRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+
+	service := NewCaptureService(
+		nil,
+		stubMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		businessEvents,
+		assistantMessages,
+	)
+	service.SetCorrelatedExpenseStateRepository(correlatedStates)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "confirm-health-1",
+		PhoneNumber: "5534988283531",
+		Text:        "sim",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if businessEvents.events[0].Status != domain.EventStatusConfirmed {
+		t.Fatalf("expected health event to be confirmed, got %q", businessEvents.events[0].Status)
+	}
+	state, found, _ := correlatedStates.GetByPhoneNumber(context.Background(), "5534988283531")
+	if !found {
+		t.Fatalf("expected correlated expense state to be created")
+	}
+	if state.Step != domain.CorrelatedExpenseStepAwaitingDecision {
+		t.Fatalf("expected awaiting decision step, got %q", state.Step)
+	}
+	if !strings.Contains(sender.lastBody, "Voce deseja lancar tambem os gastos") {
+		t.Fatalf("unexpected follow-up prompt:\n%s", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != sender.lastBody {
+		t.Fatalf("expected assistant message to match outbound follow-up")
+	}
+}
+
+func TestCaptureServiceCompletesCorrelatedExpenseFlow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	interpretationRuns := &stubInterpretationRunRepository{}
+	businessEvents := &stubBusinessEventRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	correlatedStates := &stubCorrelatedExpenseStateRepository{
+		states: map[string]domain.CorrelatedExpenseState{
+			"5534988283531": {
+				PhoneNumber:     "5534988283531",
+				FarmID:          "farm-1",
+				RootEventID:     "event-health-1",
+				RootCategory:    "health",
+				RootSubcategory: "mastitis_treatment",
+				AnimalCode:      "32",
+				Description:     "Tratamento de mastite",
+				OccurredAt:      &now,
+				MedicineAmount:  float64Ptr(120),
+				VetAmount:       float64Ptr(80),
+				Step:            domain.CorrelatedExpenseStepAwaitingExamAmount,
+				UpdatedAt:       now,
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+
+	service := NewCaptureService(
+		nil,
+		&countingMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		interpretationRuns,
+		businessEvents,
+		assistantMessages,
+	)
+	service.SetCorrelatedExpenseStateRepository(correlatedStates)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "expense-flow-1",
+		PhoneNumber: "5534988283531",
+		Text:        "75",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if len(businessEvents.events) != 3 {
+		t.Fatalf("expected three correlated expense events, got %d", len(businessEvents.events))
+	}
+	for _, event := range businessEvents.events {
+		if event.Category != "finance" || event.Subcategory != "expense" {
+			t.Fatalf("unexpected correlated expense category/subcategory: %s/%s", event.Category, event.Subcategory)
+		}
+		if event.Status != domain.EventStatusConfirmed || !event.ConfirmedByUser {
+			t.Fatalf("expected correlated expense to be confirmed immediately")
+		}
+		if attrs := businessEvents.attributes[event.ID]; attrs["related_event_id"] != "event-health-1" {
+			t.Fatalf("expected related_event_id on attributes, got %#v", attrs)
+		}
+	}
+	if _, found, _ := correlatedStates.GetByPhoneNumber(context.Background(), "5534988283531"); found {
+		t.Fatalf("expected correlated expense state to be deleted after completion")
+	}
+	if !strings.Contains(sender.lastBody, "Medicamento: R$ 120.00") || !strings.Contains(sender.lastBody, "Consulta veterinaria: R$ 80.00") || !strings.Contains(sender.lastBody, "Exames: R$ 75.00") {
+		t.Fatalf("unexpected correlated expense summary:\n%s", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != sender.lastBody {
+		t.Fatalf("expected assistant message to match outbound summary")
+	}
+	if len(interpretationRuns.runs) != 3 {
+		t.Fatalf("expected one interpretation run per correlated expense, got %d", len(interpretationRuns.runs))
+	}
+	if len(sourceMessages.messages) != 1 {
+		t.Fatalf("expected one synthetic source message for correlated expenses, got %d", len(sourceMessages.messages))
 	}
 }

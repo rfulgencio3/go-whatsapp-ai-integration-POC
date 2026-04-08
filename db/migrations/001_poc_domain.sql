@@ -179,6 +179,22 @@ CREATE INDEX IF NOT EXISTS idx_business_events_farm_id_occurred_at
 CREATE INDEX IF NOT EXISTS idx_business_events_category
     ON business_events(farm_id, category, subcategory);
 
+CREATE TABLE IF NOT EXISTS correlated_expense_states (
+    phone_number TEXT PRIMARY KEY,
+    farm_id UUID NOT NULL REFERENCES farms(id),
+    root_event_id UUID NOT NULL REFERENCES business_events(id) ON DELETE CASCADE,
+    root_category TEXT NOT NULL,
+    root_subcategory TEXT NOT NULL,
+    animal_code TEXT,
+    description TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ,
+    medicine_amount NUMERIC(14,2),
+    vet_amount NUMERIC(14,2),
+    exam_amount NUMERIC(14,2),
+    step TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS event_attributes (
     id UUID PRIMARY KEY,
     business_event_id UUID NOT NULL REFERENCES business_events(id) ON DELETE CASCADE,

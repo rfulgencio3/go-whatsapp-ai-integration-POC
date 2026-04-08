@@ -11,6 +11,10 @@ import (
 
 type ReplyFormatter interface {
 	BuildConfirmedReply(event domain.BusinessEvent) string
+	BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string
+	BuildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string
+	BuildCorrelatedExpenseDeclinedReply() string
+	BuildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string
 	BuildRejectedReply() string
 	BuildUnregisteredNumberReply() string
 	BuildAmbiguousContextReply() string
@@ -44,10 +48,30 @@ type HealthTreatmentFlow interface {
 	HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error)
 }
 
+type CorrelatedExpenseFlow interface {
+	HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error)
+}
+
 type defaultReplyFormatter struct{}
 
 func (defaultReplyFormatter) BuildConfirmedReply(event domain.BusinessEvent) string {
 	return buildConfirmedReply(event)
+}
+
+func (defaultReplyFormatter) BuildHealthExpenseCorrelationPrompt(event domain.BusinessEvent) string {
+	return buildHealthExpenseCorrelationPrompt(event)
+}
+
+func (defaultReplyFormatter) BuildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string {
+	return buildCorrelatedExpenseQuestion(state)
+}
+
+func (defaultReplyFormatter) BuildCorrelatedExpenseDeclinedReply() string {
+	return buildCorrelatedExpenseDeclinedReply()
+}
+
+func (defaultReplyFormatter) BuildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string {
+	return buildCorrelatedExpenseRecordedReply(state)
 }
 
 func (defaultReplyFormatter) BuildRejectedReply() string {

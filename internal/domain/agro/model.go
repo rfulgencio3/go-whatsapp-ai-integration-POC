@@ -151,6 +151,31 @@ type HealthTreatmentState struct {
 	UpdatedAt           time.Time
 }
 
+type CorrelatedExpenseStep string
+
+const (
+	CorrelatedExpenseStepAwaitingDecision       CorrelatedExpenseStep = "awaiting_decision"
+	CorrelatedExpenseStepAwaitingMedicineAmount CorrelatedExpenseStep = "awaiting_medicine_amount"
+	CorrelatedExpenseStepAwaitingVetAmount      CorrelatedExpenseStep = "awaiting_vet_amount"
+	CorrelatedExpenseStepAwaitingExamAmount     CorrelatedExpenseStep = "awaiting_exam_amount"
+)
+
+type CorrelatedExpenseState struct {
+	PhoneNumber     string
+	FarmID          string
+	RootEventID     string
+	RootCategory    string
+	RootSubcategory string
+	AnimalCode      string
+	Description     string
+	OccurredAt      *time.Time
+	MedicineAmount  *float64
+	VetAmount       *float64
+	ExamAmount      *float64
+	Step            CorrelatedExpenseStep
+	UpdatedAt       time.Time
+}
+
 type OnboardingMessage struct {
 	ID                string
 	PhoneNumber       string

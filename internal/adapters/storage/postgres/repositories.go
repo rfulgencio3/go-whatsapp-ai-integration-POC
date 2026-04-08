@@ -37,6 +37,10 @@ type HealthTreatmentStateRepository struct {
 	database *sql.DB
 }
 
+type CorrelatedExpenseStateRepository struct {
+	database *sql.DB
+}
+
 type OnboardingMessageRepository struct {
 	database *sql.DB
 }
@@ -83,6 +87,10 @@ func NewOnboardingStateRepository(database *sql.DB) *OnboardingStateRepository {
 
 func NewHealthTreatmentStateRepository(database *sql.DB) *HealthTreatmentStateRepository {
 	return &HealthTreatmentStateRepository{database: database}
+}
+
+func NewCorrelatedExpenseStateRepository(database *sql.DB) *CorrelatedExpenseStateRepository {
+	return &CorrelatedExpenseStateRepository{database: database}
 }
 
 func NewOnboardingMessageRepository(database *sql.DB) *OnboardingMessageRepository {
@@ -551,6 +559,155 @@ func (r *HealthTreatmentStateRepository) DeleteByPhoneNumber(ctx context.Context
 	)
 	if err != nil {
 		return fmt.Errorf("delete health treatment state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *CorrelatedExpenseStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.CorrelatedExpenseState, bool, error) {
+	var state agro.CorrelatedExpenseState
+	var animalCode sql.NullString
+	var occurredAt sql.NullTime
+	var medicineAmount sql.NullFloat64
+	var vetAmount sql.NullFloat64
+	var examAmount sql.NullFloat64
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
+
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT
+			phone_number,
+			farm_id,
+			root_event_id,
+			root_category,
+			root_subcategory,
+			animal_code,
+			description,
+			occurred_at,
+			medicine_amount,
+			vet_amount,
+			exam_amount,
+			step,
+			updated_at
+		FROM correlated_expense_states
+		WHERE phone_number IN ($1, $2)
+		ORDER BY CASE WHEN phone_number = $1 THEN 0 ELSE 1 END
+		LIMIT 1`,
+		primaryPhone,
+		secondaryPhone,
+	).Scan(
+		&state.PhoneNumber,
+		&state.FarmID,
+		&state.RootEventID,
+		&state.RootCategory,
+		&state.RootSubcategory,
+		&animalCode,
+		&state.Description,
+		&occurredAt,
+		&medicineAmount,
+		&vetAmount,
+		&examAmount,
+		&state.Step,
+		&state.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.CorrelatedExpenseState{}, false, nil
+	}
+	if err != nil {
+		return agro.CorrelatedExpenseState{}, false, fmt.Errorf("query correlated expense state: %w", err)
+	}
+	if animalCode.Valid {
+		state.AnimalCode = animalCode.String
+	}
+	if occurredAt.Valid {
+		timestamp := occurredAt.Time
+		state.OccurredAt = &timestamp
+	}
+	if medicineAmount.Valid {
+		value := medicineAmount.Float64
+		state.MedicineAmount = &value
+	}
+	if vetAmount.Valid {
+		value := vetAmount.Float64
+		state.VetAmount = &value
+	}
+	if examAmount.Valid {
+		value := examAmount.Float64
+		state.ExamAmount = &value
+	}
+
+	return state, true, nil
+}
+
+func (r *CorrelatedExpenseStateRepository) Upsert(ctx context.Context, state *agro.CorrelatedExpenseState) error {
+	if state == nil {
+		return fmt.Errorf("upsert correlated expense state: nil state")
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO correlated_expense_states (
+			phone_number,
+			farm_id,
+			root_event_id,
+			root_category,
+			root_subcategory,
+			animal_code,
+			description,
+			occurred_at,
+			medicine_amount,
+			vet_amount,
+			exam_amount,
+			step,
+			updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		ON CONFLICT (phone_number) DO UPDATE
+		SET farm_id = EXCLUDED.farm_id,
+			root_event_id = EXCLUDED.root_event_id,
+			root_category = EXCLUDED.root_category,
+			root_subcategory = EXCLUDED.root_subcategory,
+			animal_code = EXCLUDED.animal_code,
+			description = EXCLUDED.description,
+			occurred_at = EXCLUDED.occurred_at,
+			medicine_amount = EXCLUDED.medicine_amount,
+			vet_amount = EXCLUDED.vet_amount,
+			exam_amount = EXCLUDED.exam_amount,
+			step = EXCLUDED.step,
+			updated_at = EXCLUDED.updated_at`,
+		agro.NormalizePhoneNumber(state.PhoneNumber),
+		state.FarmID,
+		state.RootEventID,
+		state.RootCategory,
+		state.RootSubcategory,
+		nullIfEmpty(strings.TrimSpace(state.AnimalCode)),
+		state.Description,
+		nullTime(state.OccurredAt),
+		nullFloat64(state.MedicineAmount),
+		nullFloat64(state.VetAmount),
+		nullFloat64(state.ExamAmount),
+		string(state.Step),
+		state.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert correlated expense state: %w", err)
+	}
+
+	return nil
+}
+
+func (r *CorrelatedExpenseStateRepository) DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error {
+	primaryPhone, secondaryPhone := phoneLookupVariants(phoneNumber)
+	_, err := r.database.ExecContext(
+		ctx,
+		`DELETE FROM correlated_expense_states WHERE phone_number IN ($1, $2)`,
+		primaryPhone,
+		secondaryPhone,
+	)
+	if err != nil {
+		return fmt.Errorf("delete correlated expense state: %w", err)
 	}
 
 	return nil

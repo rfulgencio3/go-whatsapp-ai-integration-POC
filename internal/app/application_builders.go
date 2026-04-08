@@ -178,5 +178,6 @@ func buildMessageProcessor(
 		storagepostgres.NewOnboardingMessageRepository(database),
 	)
 	captureService.SetHealthTreatmentStateRepository(storagepostgres.NewHealthTreatmentStateRepository(database))
+	captureService.SetCorrelatedExpenseStateRepository(storagepostgres.NewCorrelatedExpenseStateRepository(database))
 	return captureService
 }

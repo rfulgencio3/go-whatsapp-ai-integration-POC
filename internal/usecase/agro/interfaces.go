@@ -36,6 +36,12 @@ type HealthTreatmentStateRepository interface {
 	DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error
 }
 
+type CorrelatedExpenseStateRepository interface {
+	GetByPhoneNumber(ctx context.Context, phoneNumber string) (domain.CorrelatedExpenseState, bool, error)
+	Upsert(ctx context.Context, state *domain.CorrelatedExpenseState) error
+	DeleteByPhoneNumber(ctx context.Context, phoneNumber string) error
+}
+
 type OnboardingMessageRepository interface {
 	Create(ctx context.Context, message *domain.OnboardingMessage) error
 }

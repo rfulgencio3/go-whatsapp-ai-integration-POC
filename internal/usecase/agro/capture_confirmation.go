@@ -165,6 +165,12 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 			return false, chatbot.ProcessResult{}, err
 		}
 	}
+	if confirmedByUser {
+		replyText, err = s.preparePostConfirmationReply(ctx, normalizedPhone, membership, event, replyText, now)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+	}
 
 	savedConversation, sourceMessage, err := s.persistConfirmationInbound(ctx, membership, message, now)
 	if err != nil {
@@ -225,4 +231,28 @@ func (s *CaptureService) persistConfirmationInbound(ctx context.Context, members
 	}
 
 	return conversation, sourceMessage, nil
+}
+
+func (s *CaptureService) preparePostConfirmationReply(ctx context.Context, phoneNumber string, membership domain.FarmMembership, event domain.BusinessEvent, defaultReply string, now time.Time) (string, error) {
+	if s.correlatedStates == nil || event.Category != "health" {
+		return defaultReply, nil
+	}
+
+	state := domain.CorrelatedExpenseState{
+		PhoneNumber:     phoneNumber,
+		FarmID:          membership.FarmID,
+		RootEventID:     event.ID,
+		RootCategory:    event.Category,
+		RootSubcategory: event.Subcategory,
+		AnimalCode:      event.AnimalCode,
+		Description:     event.Description,
+		OccurredAt:      event.OccurredAt,
+		Step:            domain.CorrelatedExpenseStepAwaitingDecision,
+		UpdatedAt:       now,
+	}
+	if err := s.correlatedStates.Upsert(ctx, &state); err != nil {
+		return "", err
+	}
+
+	return s.replyFormatter.BuildHealthExpenseCorrelationPrompt(event), nil
 }
