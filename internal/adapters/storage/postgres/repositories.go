@@ -1221,6 +1221,12 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 	var occurredAt sql.NullTime
 	var amount sql.NullFloat64
 	var quantity sql.NullFloat64
+	var currency sql.NullString
+	var unit sql.NullString
+	var animalCode sql.NullString
+	var lotCode sql.NullString
+	var paddockCode sql.NullString
+	var counterpartyName sql.NullString
 	var confirmedAt sql.NullTime
 
 	err := r.database.QueryRowContext(
@@ -1260,13 +1266,13 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 		&occurredAt,
 		&event.Description,
 		&amount,
-		&event.Currency,
+		&currency,
 		&quantity,
-		&event.Unit,
-		&event.AnimalCode,
-		&event.LotCode,
-		&event.PaddockCode,
-		&event.CounterpartyName,
+		&unit,
+		&animalCode,
+		&lotCode,
+		&paddockCode,
+		&counterpartyName,
 		&event.Status,
 		&event.ConfirmedByUser,
 		&confirmedAt,
@@ -1290,6 +1296,24 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 	if quantity.Valid {
 		value := quantity.Float64
 		event.Quantity = &value
+	}
+	if currency.Valid {
+		event.Currency = currency.String
+	}
+	if unit.Valid {
+		event.Unit = unit.String
+	}
+	if animalCode.Valid {
+		event.AnimalCode = animalCode.String
+	}
+	if lotCode.Valid {
+		event.LotCode = lotCode.String
+	}
+	if paddockCode.Valid {
+		event.PaddockCode = paddockCode.String
+	}
+	if counterpartyName.Valid {
+		event.CounterpartyName = counterpartyName.String
 	}
 	if confirmedAt.Valid {
 		timestamp := confirmedAt.Time
@@ -1348,11 +1372,17 @@ func (r *BusinessEventRepository) ListRecentConfirmedByIntent(ctx context.Contex
 	result := make([]agro.BusinessEvent, 0, limit)
 	for rows.Next() {
 		var (
-			event       agro.BusinessEvent
-			occurredAt  sql.NullTime
-			amount      sql.NullFloat64
-			quantity    sql.NullFloat64
-			confirmedAt sql.NullTime
+			event            agro.BusinessEvent
+			occurredAt       sql.NullTime
+			amount           sql.NullFloat64
+			quantity         sql.NullFloat64
+			currency         sql.NullString
+			unit             sql.NullString
+			animalCode       sql.NullString
+			lotCode          sql.NullString
+			paddockCode      sql.NullString
+			counterpartyName sql.NullString
+			confirmedAt      sql.NullTime
 		)
 		if err := rows.Scan(
 			&event.ID,
@@ -1364,13 +1394,13 @@ func (r *BusinessEventRepository) ListRecentConfirmedByIntent(ctx context.Contex
 			&occurredAt,
 			&event.Description,
 			&amount,
-			&event.Currency,
+			&currency,
 			&quantity,
-			&event.Unit,
-			&event.AnimalCode,
-			&event.LotCode,
-			&event.PaddockCode,
-			&event.CounterpartyName,
+			&unit,
+			&animalCode,
+			&lotCode,
+			&paddockCode,
+			&counterpartyName,
 			&event.Status,
 			&event.ConfirmedByUser,
 			&confirmedAt,
@@ -1390,6 +1420,24 @@ func (r *BusinessEventRepository) ListRecentConfirmedByIntent(ctx context.Contex
 		if quantity.Valid {
 			value := quantity.Float64
 			event.Quantity = &value
+		}
+		if currency.Valid {
+			event.Currency = currency.String
+		}
+		if unit.Valid {
+			event.Unit = unit.String
+		}
+		if animalCode.Valid {
+			event.AnimalCode = animalCode.String
+		}
+		if lotCode.Valid {
+			event.LotCode = lotCode.String
+		}
+		if paddockCode.Valid {
+			event.PaddockCode = paddockCode.String
+		}
+		if counterpartyName.Valid {
+			event.CounterpartyName = counterpartyName.String
 		}
 		if confirmedAt.Valid {
 			timestamp := confirmedAt.Time
