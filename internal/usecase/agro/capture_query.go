@@ -56,6 +56,21 @@ func (f *defaultBusinessQueryFlow) HandleIncomingMessage(ctx context.Context, me
 			return false, chatbot.ProcessResult{}, err
 		}
 		replyText = s.replyFormatter.BuildMedicineExpenseMonthReply(amount, now)
+	case s.workflowRouter.IsVetExpenseMonthQuery(message.Text):
+		periodStart, periodEnd := currentMonthRange(now)
+		var amount float64
+		amount, err = s.businessEvents.SumVetExpensesForMonth(ctx, membership.FarmID, periodStart, periodEnd)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = s.replyFormatter.BuildVetExpenseMonthReply(amount, now)
+	case s.workflowRouter.IsRecentPurchasesQuery(message.Text):
+		var items []domain.InputPurchaseSummary
+		items, err = s.businessEvents.ListRecentInputPurchases(ctx, membership.FarmID, 5)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = s.replyFormatter.BuildRecentInputPurchasesReply(items, now)
 	default:
 		return false, chatbot.ProcessResult{}, nil
 	}

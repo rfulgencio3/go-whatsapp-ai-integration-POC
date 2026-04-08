@@ -92,3 +92,27 @@ func isMedicineExpenseMonthQuery(text string) bool {
 	hasSpend := strings.Contains(normalized, "quanto gastei") || strings.Contains(normalized, "quanto foi gasto") || strings.Contains(normalized, "gasto com")
 	return hasMedicine && hasMonth && hasSpend
 }
+
+func isVetExpenseMonthQuery(text string) bool {
+	normalized := normalizeText(text)
+	hasVet := strings.Contains(normalized, "veterinario") || strings.Contains(normalized, "veterinaria") || strings.Contains(normalized, "consulta veterinaria")
+	hasMonth := strings.Contains(normalized, "esse mes") || strings.Contains(normalized, "este mes") || strings.Contains(normalized, "no mes") || strings.Contains(normalized, "neste mes")
+	hasSpend := strings.Contains(normalized, "quanto gastei") || strings.Contains(normalized, "quanto foi gasto") || strings.Contains(normalized, "gasto com")
+	return hasVet && hasMonth && hasSpend
+}
+
+func isRecentPurchasesQuery(text string) bool {
+	normalized := normalizeText(text)
+	switch {
+	case strings.Contains(normalized, "ultimas compras"):
+		return true
+	case strings.Contains(normalized, "ultimas aquisicoes"):
+		return true
+	case strings.Contains(normalized, "ultimos insumos comprados"):
+		return true
+	case strings.Contains(normalized, "quais foram as ultimas compras"):
+		return true
+	default:
+		return false
+	}
+}

@@ -1434,6 +1434,102 @@ func (r *BusinessEventRepository) SumMedicineExpensesForMonth(ctx context.Contex
 	return total.Float64, nil
 }
 
+func (r *BusinessEventRepository) SumVetExpensesForMonth(ctx context.Context, farmID string, periodStart, periodEnd time.Time) (float64, error) {
+	var total sql.NullFloat64
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(SUM(be.amount), 0)
+		FROM business_events be
+		INNER JOIN event_attributes ea
+			ON ea.business_event_id = be.id
+			AND ea.attr_key = 'expense_type'
+			AND ea.attr_value = 'vet_consultation'
+		WHERE be.farm_id = $1
+			AND be.category = 'finance'
+			AND be.subcategory = 'expense'
+			AND be.status = 'confirmed'
+			AND COALESCE(be.occurred_at, be.confirmed_at, be.created_at) >= $2
+			AND COALESCE(be.occurred_at, be.confirmed_at, be.created_at) < $3`,
+		farmID,
+		periodStart,
+		periodEnd,
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("sum vet expenses for month: %w", err)
+	}
+	if !total.Valid {
+		return 0, nil
+	}
+	return total.Float64, nil
+}
+
+func (r *BusinessEventRepository) ListRecentInputPurchases(ctx context.Context, farmID string, limit int) ([]agro.InputPurchaseSummary, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	rows, err := r.database.QueryContext(
+		ctx,
+		`SELECT
+			description,
+			amount,
+			quantity,
+			unit,
+			occurred_at
+		FROM business_events
+		WHERE farm_id = $1
+			AND category = 'finance'
+			AND subcategory = 'input_purchase'
+			AND status = 'confirmed'
+		ORDER BY COALESCE(occurred_at, confirmed_at, created_at) DESC
+		LIMIT $2`,
+		farmID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recent input purchases: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]agro.InputPurchaseSummary, 0, limit)
+	for rows.Next() {
+		var (
+			item     agro.InputPurchaseSummary
+			amount   sql.NullFloat64
+			quantity sql.NullFloat64
+			occurred sql.NullTime
+			unit     sql.NullString
+			desc     sql.NullString
+		)
+		if err := rows.Scan(&desc, &amount, &quantity, &unit, &occurred); err != nil {
+			return nil, fmt.Errorf("scan recent input purchases: %w", err)
+		}
+		if desc.Valid {
+			item.Description = desc.String
+		}
+		if amount.Valid {
+			value := amount.Float64
+			item.Amount = &value
+		}
+		if quantity.Valid {
+			value := quantity.Float64
+			item.Quantity = &value
+		}
+		if unit.Valid {
+			item.Unit = unit.String
+		}
+		if occurred.Valid {
+			timestamp := occurred.Time
+			item.OccurredAt = &timestamp
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent input purchases: %w", err)
+	}
+	return result, nil
+}
+
 func (r *BusinessEventRepository) CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error {
 	_, err := r.database.ExecContext(
 		ctx,

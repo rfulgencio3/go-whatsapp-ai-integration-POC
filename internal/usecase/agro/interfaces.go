@@ -71,6 +71,8 @@ type BusinessEventRepository interface {
 	ListActiveMilkWithdrawalAnimals(ctx context.Context, farmID string, reference time.Time) ([]domain.MilkWithdrawalAnimal, error)
 	ListRecentHealthTreatments(ctx context.Context, farmID string, limit int) ([]domain.HealthTreatmentSummary, error)
 	SumMedicineExpensesForMonth(ctx context.Context, farmID string, periodStart, periodEnd time.Time) (float64, error)
+	SumVetExpensesForMonth(ctx context.Context, farmID string, periodStart, periodEnd time.Time) (float64, error)
+	ListRecentInputPurchases(ctx context.Context, farmID string, limit int) ([]domain.InputPurchaseSummary, error)
 	CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error
 	UpdateStatus(ctx context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error
 }

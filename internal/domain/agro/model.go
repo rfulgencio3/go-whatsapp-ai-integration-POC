@@ -288,6 +288,14 @@ type HealthTreatmentSummary struct {
 	OccurredAt    *time.Time
 }
 
+type InputPurchaseSummary struct {
+	Description string
+	Amount      *float64
+	Quantity    *float64
+	Unit        string
+	OccurredAt  *time.Time
+}
+
 func NormalizePhoneNumber(value string) string {
 	return common.NormalizePhoneNumber(value)
 }

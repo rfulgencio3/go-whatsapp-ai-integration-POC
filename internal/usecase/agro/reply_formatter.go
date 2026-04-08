@@ -109,6 +109,37 @@ func buildMedicineExpenseMonthReply(amount float64, reference time.Time) string 
 	return fmt.Sprintf("Gasto com medicamento no mes %s: R$ %.2f", monthLabel, amount)
 }
 
+func buildVetExpenseMonthReply(amount float64, reference time.Time) string {
+	monthLabel := reference.In(time.FixedZone("BRT", -3*60*60)).Format("01/2006")
+	return fmt.Sprintf("Gasto com veterinario no mes %s: R$ %.2f", monthLabel, amount)
+}
+
+func buildRecentInputPurchasesReply(items []domain.InputPurchaseSummary, reference time.Time) string {
+	if len(items) == 0 {
+		return "Nenhuma compra de insumos registrada recentemente."
+	}
+
+	lines := []string{"Ultimas compras de insumos:"}
+	for _, item := range items {
+		line := strings.TrimSpace(item.Description)
+		if line == "" {
+			line = "Compra registrada"
+		}
+		if item.Amount != nil {
+			line += " | Valor: " + formatCurrency(item.Amount, "BRL")
+		}
+		if item.Quantity != nil {
+			line += " | Quantidade: " + formatQuantity(item.Quantity, item.Unit)
+		}
+		if item.OccurredAt != nil {
+			line += " | Data: " + item.OccurredAt.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006")
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Referencia: "+reference.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006 15:04"))
+	return strings.Join(lines, "\n")
+}
+
 func buildRejectedReply() string {
 	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
 }
