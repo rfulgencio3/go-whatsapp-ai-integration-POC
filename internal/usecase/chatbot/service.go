@@ -37,6 +37,7 @@ type noopIncomingMessagePreprocessor struct{}
 
 const unsupportedInboundReply = "No momento consigo processar mensagens de texto e audio no WhatsApp."
 const rateLimitedFallbackReply = "Recebi sua mensagem. No momento estou com limite temporario de processamento. Tente novamente em instantes."
+const audioTooLongReply = "No momento aceito audios de ate 30 segundos. Tente enviar um audio mais curto."
 
 func NewService(
 	allowedPhoneNumber string,
@@ -132,6 +133,14 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 
 	preparedMessage, err := s.incomingPreprocessor.Prepare(ctx, incomingMessage)
 	if err != nil {
+		if errors.Is(err, chat.ErrAudioTooLong) {
+			s.logger.Info("chatbot inbound audio exceeds supported duration", map[string]any{
+				"phone_number": chat.NormalizePhoneNumber(incomingMessage.PhoneNumber),
+				"message_id":   strings.TrimSpace(incomingMessage.MessageID),
+				"duration_sec": incomingMessage.AudioDurationSeconds,
+			})
+			return s.sendAudioTooLongReply(ctx, incomingMessage)
+		}
 		if errors.Is(err, chat.ErrUnsupportedMessageType) {
 			s.logger.Info("chatbot unsupported inbound after preprocessing", map[string]any{
 				"phone_number": chat.NormalizePhoneNumber(incomingMessage.PhoneNumber),
@@ -140,6 +149,14 @@ func (s *Service) processAndSend(ctx context.Context, incomingMessage chat.Incom
 			return s.sendUnsupportedReply(ctx, incomingMessage)
 		}
 		return ProcessResult{}, err
+	}
+	if preparedMessage.AudioTooLong {
+		s.logger.Info("chatbot inbound audio exceeds supported duration", map[string]any{
+			"phone_number": chat.NormalizePhoneNumber(preparedMessage.PhoneNumber),
+			"message_id":   strings.TrimSpace(preparedMessage.MessageID),
+			"duration_sec": preparedMessage.AudioDurationSeconds,
+		})
+		return s.sendAudioTooLongReply(ctx, preparedMessage)
 	}
 	if strings.TrimSpace(preparedMessage.Text) == "" {
 		s.logger.Info("chatbot empty prepared message, sending unsupported reply", map[string]any{
@@ -268,6 +285,37 @@ func (s *Service) sendUnsupportedReply(ctx context.Context, incomingMessage chat
 	}, nil
 }
 
+func (s *Service) sendAudioTooLongReply(ctx context.Context, incomingMessage chat.IncomingMessage) (ProcessResult, error) {
+	normalizedPhoneNumber := chat.NormalizePhoneNumber(incomingMessage.PhoneNumber)
+	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
+		return ProcessResult{}, chat.ErrPhoneNumberNotAllowed
+	}
+
+	userChatMessage := buildUserChatMessage(incomingMessage, audioTooLongSummary(incomingMessage))
+	assistantChatMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      audioTooLongReply,
+		CreatedAt: time.Now().UTC(),
+		Type:      chat.MessageTypeText,
+		Provider:  strings.TrimSpace(incomingMessage.Provider),
+	}
+
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhoneNumber, assistantChatMessage.Text); err != nil {
+		return ProcessResult{}, err
+	}
+	if err := s.persistConversation(ctx, normalizedPhoneNumber, userChatMessage, assistantChatMessage); err != nil {
+		return ProcessResult{}, err
+	}
+
+	return ProcessResult{
+		PhoneNumber:        normalizedPhoneNumber,
+		IncomingMessage:    incomingMessage,
+		UserMessage:        userChatMessage,
+		AssistantMessage:   assistantChatMessage,
+		AssistantReplyKind: ReplyKindText,
+	}, nil
+}
+
 func (s *Service) sendOverrideReply(ctx context.Context, incomingMessage chat.IncomingMessage, override ReplyOverride) (ProcessResult, error) {
 	normalizedPhoneNumber := chat.NormalizePhoneNumber(incomingMessage.PhoneNumber)
 	if s.allowedPhoneNumber != "" && normalizedPhoneNumber != s.allowedPhoneNumber {
@@ -347,6 +395,7 @@ func normalizeIncomingMessage(message chat.IncomingMessage) chat.IncomingMessage
 		TranscriptionID:       strings.TrimSpace(message.TranscriptionID),
 		TranscriptionLanguage: strings.TrimSpace(message.TranscriptionLanguage),
 		AudioDurationSeconds:  message.AudioDurationSeconds,
+		AudioTooLong:          message.AudioTooLong,
 	}
 	if normalized.Type == "" {
 		if normalized.Text != "" {
@@ -399,6 +448,13 @@ func unsupportedInboundSummary(incomingMessage chat.IncomingMessage) string {
 		return "unsupported inbound message"
 	}
 	return fmt.Sprintf("unsupported inbound message of type %s", incomingMessage.Type)
+}
+
+func audioTooLongSummary(incomingMessage chat.IncomingMessage) string {
+	if incomingMessage.AudioDurationSeconds > 0 {
+		return fmt.Sprintf("audio longer than supported limit: %.1f seconds", incomingMessage.AudioDurationSeconds)
+	}
+	return "audio longer than supported limit"
 }
 
 func isRateLimitedReplyError(err error) bool {

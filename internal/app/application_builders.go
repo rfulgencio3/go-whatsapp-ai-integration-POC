@@ -123,7 +123,7 @@ func buildMessagingRuntime(cfg config.Config, logger *observability.Logger, http
 
 func buildIncomingPreprocessor(cfg config.Config, httpClient *http.Client, transcriptionClient *transcriptionhttpapi.Client) chatbot.IncomingMessagePreprocessor {
 	if cfg.HasTwilioWebhookConfig() {
-		return twilioinbound.NewPreprocessor(httpClient, cfg.TwilioAccountSID, cfg.TwilioAuthToken, cfg.TranscriptionMaxBytes, transcriptionClient)
+		return twilioinbound.NewPreprocessor(httpClient, cfg.TwilioAccountSID, cfg.TwilioAuthToken, cfg.TranscriptionMaxBytes, cfg.TranscriptionMaxAudioSec, transcriptionClient)
 	}
 
 	return noopinbound.NewPreprocessor()

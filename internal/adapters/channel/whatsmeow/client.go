@@ -297,6 +297,15 @@ func (c *Client) enrichIncomingMessage(ctx context.Context, incoming chat.Incomi
 	if audio == nil {
 		return incoming
 	}
+	if c.config.TranscriptionMaxAudioSec > 0 && incoming.AudioDurationSeconds > float64(c.config.TranscriptionMaxAudioSec) {
+		c.logger.Info("whatsmeow inbound audio exceeds supported duration", map[string]any{
+			"message_id":   eventMessageID(incoming),
+			"duration_sec": incoming.AudioDurationSeconds,
+			"max_seconds":  c.config.TranscriptionMaxAudioSec,
+		})
+		incoming.AudioTooLong = true
+		return incoming
+	}
 	if c.config.TranscriptionMaxBytes > 0 && int64(audio.GetFileLength()) > c.config.TranscriptionMaxBytes {
 		c.logger.Error("whatsmeow inbound audio exceeds transcription max bytes", map[string]any{
 			"message_id": eventMessageID(incoming),

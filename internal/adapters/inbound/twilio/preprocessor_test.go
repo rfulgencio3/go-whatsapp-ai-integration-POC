@@ -12,9 +12,11 @@ import (
 
 type stubAudioTranscriber struct {
 	result transcriptionhttpapi.Result
+	calls  int
 }
 
-func (s stubAudioTranscriber) Transcribe(_ context.Context, _ string, _ string, data []byte) (transcriptionhttpapi.Result, error) {
+func (s *stubAudioTranscriber) Transcribe(_ context.Context, _ string, _ string, data []byte) (transcriptionhttpapi.Result, error) {
+	s.calls++
 	if len(data) == 0 {
 		return transcriptionhttpapi.Result{}, nil
 	}
@@ -36,7 +38,8 @@ func TestPreprocessorPrepareTranscribesAudioAttachment(t *testing.T) {
 		"AC123",
 		"secret",
 		1024,
-		stubAudioTranscriber{result: transcriptionhttpapi.Result{
+		30,
+		&stubAudioTranscriber{result: transcriptionhttpapi.Result{
 			ID:            "tr-1",
 			Transcript:    "audio transcribed",
 			Language:      "pt-BR",
@@ -65,7 +68,7 @@ func TestPreprocessorPrepareTranscribesAudioAttachment(t *testing.T) {
 }
 
 func TestPreprocessorPrepareRejectsUnsupportedMedia(t *testing.T) {
-	preprocessor := NewPreprocessor(&http.Client{}, "AC123", "secret", 1024, nil)
+	preprocessor := NewPreprocessor(&http.Client{}, "AC123", "secret", 1024, 30, nil)
 
 	_, err := preprocessor.Prepare(context.Background(), chat.IncomingMessage{
 		MessageID:   "SMimage",
@@ -78,5 +81,30 @@ func TestPreprocessorPrepareRejectsUnsupportedMedia(t *testing.T) {
 	})
 	if err != chat.ErrUnsupportedMessageType {
 		t.Fatalf("expected ErrUnsupportedMessageType, got %v", err)
+	}
+}
+
+func TestPreprocessorPrepareRejectsAudioLongerThanSupportedDuration(t *testing.T) {
+	transcriber := &stubAudioTranscriber{}
+	preprocessor := NewPreprocessor(&http.Client{}, "AC123", "secret", 1024, 30, transcriber)
+
+	message, err := preprocessor.Prepare(context.Background(), chat.IncomingMessage{
+		MessageID:            "SMaudio-long",
+		PhoneNumber:          "5511999999999",
+		Type:                 chat.MessageTypeAudio,
+		AudioDurationSeconds: 31,
+		MediaAttachments: []chat.MediaAttachment{{
+			URL:         "https://example.com/media/1",
+			ContentType: "audio/ogg",
+		}},
+	})
+	if err != chat.ErrAudioTooLong {
+		t.Fatalf("expected ErrAudioTooLong, got %v", err)
+	}
+	if !message.AudioTooLong {
+		t.Fatalf("expected message to be flagged as audio too long")
+	}
+	if transcriber.calls != 0 {
+		t.Fatalf("expected no transcription call for long audio, got %d", transcriber.calls)
 	}
 }

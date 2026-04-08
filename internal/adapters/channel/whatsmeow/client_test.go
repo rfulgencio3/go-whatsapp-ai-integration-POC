@@ -177,3 +177,45 @@ func TestEnrichIncomingMessageSkipsOversizedAudio(t *testing.T) {
 		t.Fatalf("expected empty text when transcription is skipped, got %q", enriched.Text)
 	}
 }
+
+func TestEnrichIncomingMessageSkipsAudioLongerThanSupportedDuration(t *testing.T) {
+	t.Parallel()
+
+	downloader := &stubMediaDownloader{payload: []byte("audio-bytes")}
+	transcriber := &stubAudioTranscriber{}
+	client := &Client{
+		config: config.Config{
+			TranscriptionMaxBytes:    1024,
+			TranscriptionMaxAudioSec: 30,
+		},
+		logger:      observability.NewLogger(),
+		downloader:  downloader,
+		transcriber: transcriber,
+	}
+	message := &waProto.Message{
+		AudioMessage: &waProto.AudioMessage{
+			Mimetype:   proto.String("audio/ogg"),
+			FileLength: proto.Uint64(10),
+			Seconds:    proto.Uint32(31),
+		},
+	}
+	incoming := chat.IncomingMessage{
+		MessageID:            "wamid-audio-4",
+		PhoneNumber:          "5511999999999",
+		Type:                 chat.MessageTypeAudio,
+		Provider:             "whatsmeow",
+		AudioDurationSeconds: 31,
+	}
+
+	enriched := client.enrichIncomingMessage(context.Background(), incoming, message)
+
+	if downloader.calls != 0 {
+		t.Fatalf("expected no download for oversized audio duration, got %d", downloader.calls)
+	}
+	if transcriber.calls != 0 {
+		t.Fatalf("expected no transcription for oversized audio duration, got %d", transcriber.calls)
+	}
+	if !enriched.AudioTooLong {
+		t.Fatalf("expected audio to be flagged as too long")
+	}
+}

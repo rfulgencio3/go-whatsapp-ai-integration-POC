@@ -24,6 +24,7 @@ const (
 	DefaultWebhookQueueMaxRetries   = 3
 	DefaultWebhookQueueRetryDelay   = 2 * time.Second
 	DefaultTranscriptionMaxBytes    = 25 << 20
+	DefaultTranscriptionMaxAudioSec = 30
 	DefaultChannelProvider          = "auto"
 	DefaultWhatsmeowClientName      = "Chrome (Linux)"
 	DefaultWhatsmeowPairMode        = "qr"
@@ -59,6 +60,7 @@ type Config struct {
 	DatabaseURL              string
 	TranscriptionAPIBaseURL  string
 	TranscriptionMaxBytes    int64
+	TranscriptionMaxAudioSec int
 	ChannelProvider          string
 	WhatsmeowStoreDSN        string
 	WhatsmeowPairMode        string
@@ -97,6 +99,7 @@ func Load() Config {
 		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		TranscriptionAPIBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("TRANSCRIPTION_API_BASE_URL")), "/"),
 		TranscriptionMaxBytes:    getInt64Env("TRANSCRIPTION_MAX_BYTES", DefaultTranscriptionMaxBytes),
+		TranscriptionMaxAudioSec: getIntEnv("TRANSCRIPTION_MAX_AUDIO_SECONDS", DefaultTranscriptionMaxAudioSec),
 		ChannelProvider:          strings.ToLower(getEnv("WHATSAPP_CHANNEL_PROVIDER", DefaultChannelProvider)),
 		WhatsmeowStoreDSN:        strings.TrimSpace(getEnv("WHATSAPPMEOW_STORE_DSN", strings.TrimSpace(os.Getenv("DATABASE_URL")))),
 		WhatsmeowPairMode:        strings.ToLower(getEnv("WHATSAPPMEOW_PAIR_MODE", DefaultWhatsmeowPairMode)),

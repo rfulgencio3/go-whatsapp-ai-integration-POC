@@ -45,6 +45,7 @@ type IncomingMessage struct {
 	TranscriptionID       string
 	TranscriptionLanguage string
 	AudioDurationSeconds  float64
+	AudioTooLong          bool
 }
 
 type MediaAttachment struct {

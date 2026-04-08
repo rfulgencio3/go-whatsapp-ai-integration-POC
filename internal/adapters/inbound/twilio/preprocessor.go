@@ -21,15 +21,17 @@ type Preprocessor struct {
 	accountSID  string
 	authToken   string
 	maxBytes    int64
+	maxSeconds  int
 	transcriber AudioTranscriber
 }
 
-func NewPreprocessor(httpClient *http.Client, accountSID, authToken string, maxBytes int64, transcriber AudioTranscriber) *Preprocessor {
+func NewPreprocessor(httpClient *http.Client, accountSID, authToken string, maxBytes int64, maxSeconds int, transcriber AudioTranscriber) *Preprocessor {
 	return &Preprocessor{
 		httpClient:  httpClient,
 		accountSID:  strings.TrimSpace(accountSID),
 		authToken:   strings.TrimSpace(authToken),
 		maxBytes:    maxBytes,
+		maxSeconds:  maxSeconds,
 		transcriber: transcriber,
 	}
 }
@@ -49,6 +51,10 @@ func (p *Preprocessor) Prepare(ctx context.Context, message chat.IncomingMessage
 	audio, ok := firstAudioAttachment(message.MediaAttachments)
 	if !ok || p.transcriber == nil {
 		return message, chat.ErrUnsupportedMessageType
+	}
+	if p.maxSeconds > 0 && message.AudioDurationSeconds > float64(p.maxSeconds) {
+		message.AudioTooLong = true
+		return message, chat.ErrAudioTooLong
 	}
 
 	payload, err := p.downloadMedia(ctx, audio.URL)

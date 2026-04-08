@@ -58,6 +58,9 @@ type stubIncomingPreprocessor struct {
 
 func (s *stubIncomingPreprocessor) Prepare(_ context.Context, message chat.IncomingMessage) (chat.IncomingMessage, error) {
 	if s.err != nil {
+		if s.prepared.PhoneNumber != "" {
+			return s.prepared, s.err
+		}
 		return chat.IncomingMessage{}, s.err
 	}
 	if s.prepared.PhoneNumber == "" {
@@ -358,6 +361,42 @@ func TestProcessIncomingMessageRepliesToUnsupportedMedia(t *testing.T) {
 	}
 	if len(archive.recorded) != 2 {
 		t.Fatalf("expected unsupported flow to be archived, got %d messages", len(archive.recorded))
+	}
+}
+
+func TestProcessIncomingMessageRepliesToAudioLongerThanSupportedDuration(t *testing.T) {
+	repository := newStubConversationRepository()
+	archive := &stubMessageArchive{}
+	sender := &stubMessageSender{}
+	deduplicator := newStubMessageDeduplicator()
+	preprocessor := &stubIncomingPreprocessor{
+		prepared: chat.IncomingMessage{
+			MessageID:            "SMaudio-long",
+			PhoneNumber:          "5511999999999",
+			Type:                 chat.MessageTypeAudio,
+			Provider:             "twilio",
+			AudioDurationSeconds: 42,
+			AudioTooLong:         true,
+		},
+		err: chat.ErrAudioTooLong,
+	}
+	service := NewService("", stubReplyGenerator{reply: "assistant reply"}, nil, sender, preprocessor, repository, archive, deduplicator)
+
+	_, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:            "SMaudio-long",
+		PhoneNumber:          "5511999999999",
+		Type:                 chat.MessageTypeAudio,
+		Provider:             "twilio",
+		AudioDurationSeconds: 42,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if sender.lastBody != audioTooLongReply {
+		t.Fatalf("expected audio-too-long reply, got %q", sender.lastBody)
+	}
+	if len(archive.recorded) != 2 {
+		t.Fatalf("expected audio-too-long flow to be archived, got %d messages", len(archive.recorded))
 	}
 }
 
