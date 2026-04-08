@@ -137,6 +137,50 @@ func (s *CaptureService) handleConfirmationMessage(ctx context.Context, membersh
 	if !found || event.Status != domain.EventStatusDraft {
 		return false, chatbot.ProcessResult{}, nil
 	}
+	if decision == confirmationAccepted && event.Category == "reproduction" && event.Subcategory == "insemination" {
+		exists, err := s.validateAnimalExists(ctx, membership.FarmID, event.AnimalCode)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if !exists {
+			replyText := s.replyFormatter.BuildMissingAnimalReply(event.AnimalCode)
+			savedConversation, sourceMessage, err := s.persistConfirmationInbound(ctx, membership, message, now)
+			if err != nil {
+				return false, chatbot.ProcessResult{}, err
+			}
+			if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
+				return false, chatbot.ProcessResult{}, err
+			}
+			userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+			assistantMessage := chat.Message{
+				Role:      chat.AssistantRole,
+				Text:      replyText,
+				CreatedAt: now,
+				Type:      chat.MessageTypeText,
+				Provider:  s.persistence.ProviderOrDefault(message.Provider),
+			}
+			if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+				return false, chatbot.ProcessResult{}, err
+			}
+			if err := s.persistence.PersistAssistantMessage(ctx, savedConversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeText, now); err != nil {
+				return false, chatbot.ProcessResult{}, err
+			}
+			return true, chatbot.ProcessResult{
+				PhoneNumber:      normalizedPhone,
+				IncomingMessage:  message,
+				UserMessage:      userMessage,
+				AssistantMessage: assistantMessage,
+			}, nil
+		}
+		if s.farmAnimals != nil {
+			if err := s.farmAnimals.TouchLastSeen(ctx, membership.FarmID, event.AnimalCode, now); err != nil {
+				return false, chatbot.ProcessResult{}, err
+			}
+			if s.animalCache != nil {
+				s.animalCache.Set(membership.FarmID, event.AnimalCode, true)
+			}
+		}
+	}
 	status := domain.EventStatusRejected
 	confirmedByUser := false
 	replyText := s.replyFormatter.BuildRejectedReply()

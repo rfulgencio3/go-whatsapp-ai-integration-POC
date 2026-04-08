@@ -15,6 +15,12 @@ type FarmMembershipRepository interface {
 	FindActiveByPhoneNumber(ctx context.Context, phoneNumber string) ([]domain.FarmMembership, error)
 }
 
+type FarmAnimalRepository interface {
+	FindByAnimalCode(ctx context.Context, farmID, animalCode string) (domain.FarmAnimal, bool, error)
+	Upsert(ctx context.Context, animal *domain.FarmAnimal) error
+	TouchLastSeen(ctx context.Context, farmID, animalCode string, seenAt time.Time) error
+}
+
 type FarmRegistrationRepository interface {
 	CreateInitialRegistration(ctx context.Context, phoneNumber, producerName, farmName string) (domain.FarmMembership, error)
 }

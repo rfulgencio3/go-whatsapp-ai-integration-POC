@@ -259,6 +259,14 @@ func buildRejectedReply() string {
 	return "Certo. Nao vou considerar esse registro. Me envie a correcao em uma unica mensagem."
 }
 
+func buildAnimalRegisteredReply(animalCode string) string {
+	return fmt.Sprintf("Pronto. Cadastrei a vaca %s para essa fazenda. Se quiser, agora pode repetir o registro de inseminacao.", strings.TrimSpace(strings.ToUpper(animalCode)))
+}
+
+func buildMissingAnimalReply(animalCode string) string {
+	return fmt.Sprintf("Nao encontrei a vaca %s cadastrada nesta fazenda. Se quiser incluir agora, responda: CADASTRAR VACA %s", strings.TrimSpace(strings.ToUpper(animalCode)), strings.TrimSpace(strings.ToUpper(animalCode)))
+}
+
 func buildUnregisteredNumberReply() string {
 	return "Ainda nao encontrei seu numero vinculado a uma fazenda. Se quiser, responda CADASTRAR para iniciar o cadastro."
 }

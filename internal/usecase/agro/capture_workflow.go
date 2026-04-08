@@ -61,6 +61,28 @@ func isHelpCommand(text string) bool {
 	return parseHelpTopic(text) != ""
 }
 
+func parseAnimalRegistrationCommand(text string) (string, bool) {
+	normalized := normalizeText(text)
+	switch {
+	case strings.HasPrefix(normalized, "cadastrar vaca "):
+		return extractTrailingAnimalCode(normalized, "cadastrar vaca ")
+	case strings.HasPrefix(normalized, "cadastrar matriz "):
+		return extractTrailingAnimalCode(normalized, "cadastrar matriz ")
+	case strings.HasPrefix(normalized, "cadastrar animal "):
+		return extractTrailingAnimalCode(normalized, "cadastrar animal ")
+	default:
+		return "", false
+	}
+}
+
+func extractTrailingAnimalCode(text, prefix string) (string, bool) {
+	value := strings.TrimSpace(strings.TrimPrefix(text, prefix))
+	if value == "" {
+		return "", false
+	}
+	return strings.ToUpper(value), true
+}
+
 func parseHelpTopic(text string) helpTopic {
 	normalized := normalizeText(text)
 	switch normalized {

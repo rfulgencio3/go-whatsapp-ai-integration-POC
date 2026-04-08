@@ -80,6 +80,17 @@ type FarmMembership struct {
 	UpdatedAt   time.Time
 }
 
+type FarmAnimal struct {
+	ID          string
+	FarmID      string
+	AnimalCode  string
+	DisplayName string
+	Status      string
+	LastSeenAt  *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type FarmContext struct {
 	ProducerID   string
 	FarmID       string

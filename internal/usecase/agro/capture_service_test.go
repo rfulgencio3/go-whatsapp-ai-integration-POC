@@ -72,6 +72,51 @@ func (s *stubFarmRegistrationRepository) CreateInitialRegistration(_ context.Con
 	return s.membership, nil
 }
 
+type stubFarmAnimalRepository struct {
+	animals map[string]domain.FarmAnimal
+	err     error
+}
+
+func (s *stubFarmAnimalRepository) FindByAnimalCode(_ context.Context, farmID, animalCode string) (domain.FarmAnimal, bool, error) {
+	if s.err != nil {
+		return domain.FarmAnimal{}, false, s.err
+	}
+	if s.animals == nil {
+		return domain.FarmAnimal{}, false, nil
+	}
+	animal, found := s.animals[farmID+":"+strings.TrimSpace(strings.ToUpper(animalCode))]
+	return animal, found, nil
+}
+
+func (s *stubFarmAnimalRepository) Upsert(_ context.Context, animal *domain.FarmAnimal) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.animals == nil {
+		s.animals = make(map[string]domain.FarmAnimal)
+	}
+	s.animals[animal.FarmID+":"+strings.TrimSpace(strings.ToUpper(animal.AnimalCode))] = *animal
+	return nil
+}
+
+func (s *stubFarmAnimalRepository) TouchLastSeen(_ context.Context, farmID, animalCode string, seenAt time.Time) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.animals == nil {
+		return nil
+	}
+	key := farmID + ":" + strings.TrimSpace(strings.ToUpper(animalCode))
+	animal, found := s.animals[key]
+	if !found {
+		return nil
+	}
+	animal.LastSeenAt = &seenAt
+	animal.UpdatedAt = seenAt
+	s.animals[key] = animal
+	return nil
+}
+
 type stubPhoneContextStateRepository struct {
 	states map[string]domain.PhoneContextState
 	err    error
@@ -1505,6 +1550,63 @@ func TestCaptureServicePersistsTranscriptionForAudioMessages(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceRegistersAnimalByCommand(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	animals := &stubFarmAnimalRepository{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+	service.SetFarmAnimalRepository(animals)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "animal-register-1",
+		PhoneNumber: "5511999999999",
+		Text:        "cadastrar vaca 32",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if processor.calls != 0 {
+		t.Fatalf("expected downstream not to be called, got %d", processor.calls)
+	}
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound registration reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Cadastrei a vaca 32") {
+		t.Fatalf("unexpected animal registration reply: %q", result.AssistantMessage.Text)
+	}
+	if _, found, _ := animals.FindByAnimalCode(context.Background(), "farm-1", "32"); !found {
+		t.Fatalf("expected animal 32 to be registered")
+	}
+}
+
 func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	t.Parallel()
 
@@ -1609,6 +1711,85 @@ func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	}
 	if len(archive.recorded) != 2 {
 		t.Fatalf("expected confirmation flow archived in legacy archive")
+	}
+}
+
+func TestCaptureServiceBlocksInseminationConfirmationWhenAnimalIsMissing(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:                         "conv-1",
+			FarmID:                     "farm-1",
+			PendingConfirmationEventID: "event-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		events: []domain.BusinessEvent{
+			{
+				ID:          "event-1",
+				FarmID:      "farm-1",
+				Category:    "reproduction",
+				Subcategory: "insemination",
+				AnimalCode:  "32",
+				Description: "A vaca 32 foi inseminada hoje",
+				Status:      domain.EventStatusDraft,
+			},
+		},
+	}
+	assistantMessages := &stubAssistantMessageRepository{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	animals := &stubFarmAnimalRepository{}
+
+	service := NewCaptureService(
+		nil,
+		stubMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		businessEvents,
+		assistantMessages,
+	)
+	service.SetFarmAnimalRepository(animals)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "confirm-insemination-1",
+		PhoneNumber: "5511999999999",
+		Text:        "sim",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if businessEvents.events[0].Status != domain.EventStatusDraft {
+		t.Fatalf("expected insemination event to remain draft, got %q", businessEvents.events[0].Status)
+	}
+	if conversations.conversation.PendingConfirmationEventID != "event-1" {
+		t.Fatalf("expected pending confirmation event id to stay unchanged, got %q", conversations.conversation.PendingConfirmationEventID)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Nao encontrei a vaca 32 cadastrada") {
+		t.Fatalf("unexpected missing animal reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "CADASTRAR VACA 32") {
+		t.Fatalf("expected registration hint in reply, got %q", result.AssistantMessage.Text)
 	}
 }
 

@@ -179,6 +179,7 @@ func buildMessageProcessor(
 	)
 	captureService.SetHealthTreatmentStateRepository(storagepostgres.NewHealthTreatmentStateRepository(database))
 	captureService.SetCorrelatedExpenseStateRepository(storagepostgres.NewCorrelatedExpenseStateRepository(database))
+	captureService.SetFarmAnimalRepository(storagepostgres.NewFarmAnimalRepository(database))
 	captureService.EnableBusinessQueryFlow()
 	return captureService
 }

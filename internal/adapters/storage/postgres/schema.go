@@ -41,6 +41,18 @@ var schemaStatements = []string{
 		ON farm_memberships(farm_id, phone_number)`,
 	`CREATE INDEX IF NOT EXISTS idx_farm_memberships_phone_number
 		ON farm_memberships(phone_number)`,
+	`CREATE TABLE IF NOT EXISTS farm_animals (
+		id UUID PRIMARY KEY,
+		farm_id UUID NOT NULL REFERENCES farms(id),
+		animal_code TEXT NOT NULL,
+		display_name TEXT,
+		status TEXT NOT NULL DEFAULT 'active',
+		last_seen_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_farm_animals_farm_code
+		ON farm_animals(farm_id, animal_code)`,
 	`CREATE TABLE IF NOT EXISTS phone_context_states (
 		phone_number TEXT PRIMARY KEY,
 		active_farm_id UUID REFERENCES farms(id),

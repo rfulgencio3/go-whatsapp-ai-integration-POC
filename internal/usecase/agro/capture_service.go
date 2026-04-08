@@ -3,6 +3,7 @@ package agro
 import (
 	"context"
 	"strings"
+	"time"
 
 	domain "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/agro"
 	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
@@ -29,6 +30,8 @@ type CaptureService struct {
 	onboardingStates   OnboardingStateRepository
 	healthStates       HealthTreatmentStateRepository
 	correlatedStates   CorrelatedExpenseStateRepository
+	farmAnimals        FarmAnimalRepository
+	animalCache        *animalLookupCache
 	onboardingMessages OnboardingMessageRepository
 	conversations      ConversationRepository
 	sourceMessages     SourceMessageRepository
@@ -105,6 +108,7 @@ func NewCaptureService(
 		interpretationRuns: interpretationRuns,
 		businessEvents:     businessEvents,
 		assistantMessages:  assistantMessages,
+		animalCache:        newAnimalLookupCache(5 * time.Minute),
 	}
 }
 
@@ -116,6 +120,13 @@ func (s *CaptureService) SetHealthTreatmentStateRepository(repository HealthTrea
 func (s *CaptureService) SetCorrelatedExpenseStateRepository(repository CorrelatedExpenseStateRepository) {
 	s.correlatedStates = repository
 	s.correlatedExpenses = newDefaultCorrelatedExpenseFlow(s)
+}
+
+func (s *CaptureService) SetFarmAnimalRepository(repository FarmAnimalRepository) {
+	s.farmAnimals = repository
+	if s.animalCache == nil {
+		s.animalCache = newAnimalLookupCache(5 * time.Minute)
+	}
 }
 
 func (s *CaptureService) EnableBusinessQueryFlow() {
@@ -191,6 +202,13 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 			if handled {
 				return result, nil
 			}
+		}
+		handled, result, err = s.handleAnimalRegistration(ctx, membership, message)
+		if err != nil {
+			return chatbot.ProcessResult{}, err
+		}
+		if handled {
+			return result, nil
 		}
 	}
 

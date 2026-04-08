@@ -22,6 +22,10 @@ type FarmRegistrationRepository struct {
 	database *sql.DB
 }
 
+type FarmAnimalRepository struct {
+	database *sql.DB
+}
+
 type ConversationRepository struct {
 	database *sql.DB
 }
@@ -72,6 +76,10 @@ func NewFarmMembershipRepository(database *sql.DB) *FarmMembershipRepository {
 
 func NewFarmRegistrationRepository(database *sql.DB) *FarmRegistrationRepository {
 	return &FarmRegistrationRepository{database: database}
+}
+
+func NewFarmAnimalRepository(database *sql.DB) *FarmAnimalRepository {
+	return &FarmAnimalRepository{database: database}
 }
 
 func NewConversationRepository(database *sql.DB) *ConversationRepository {
@@ -259,6 +267,97 @@ func (r *FarmRegistrationRepository) CreateInitialRegistration(ctx context.Conte
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
+}
+
+func (r *FarmAnimalRepository) FindByAnimalCode(ctx context.Context, farmID, animalCode string) (agro.FarmAnimal, bool, error) {
+	var animal agro.FarmAnimal
+	var displayName sql.NullString
+	var lastSeenAt sql.NullTime
+
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT id, farm_id, animal_code, display_name, status, last_seen_at, created_at, updated_at
+		FROM farm_animals
+		WHERE farm_id = $1 AND animal_code = $2
+		LIMIT 1`,
+		farmID,
+		strings.TrimSpace(strings.ToUpper(animalCode)),
+	).Scan(
+		&animal.ID,
+		&animal.FarmID,
+		&animal.AnimalCode,
+		&displayName,
+		&animal.Status,
+		&lastSeenAt,
+		&animal.CreatedAt,
+		&animal.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return agro.FarmAnimal{}, false, nil
+	}
+	if err != nil {
+		return agro.FarmAnimal{}, false, fmt.Errorf("query farm animal by code: %w", err)
+	}
+	if displayName.Valid {
+		animal.DisplayName = displayName.String
+	}
+	if lastSeenAt.Valid {
+		timestamp := lastSeenAt.Time
+		animal.LastSeenAt = &timestamp
+	}
+	return animal, true, nil
+}
+
+func (r *FarmAnimalRepository) Upsert(ctx context.Context, animal *agro.FarmAnimal) error {
+	if animal == nil {
+		return fmt.Errorf("upsert farm animal: nil animal")
+	}
+	if animal.CreatedAt.IsZero() {
+		animal.CreatedAt = time.Now().UTC()
+	}
+	if animal.UpdatedAt.IsZero() {
+		animal.UpdatedAt = animal.CreatedAt
+	}
+
+	_, err := r.database.ExecContext(
+		ctx,
+		`INSERT INTO farm_animals (id, farm_id, animal_code, display_name, status, last_seen_at, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (farm_id, animal_code) DO UPDATE
+		SET display_name = EXCLUDED.display_name,
+			status = EXCLUDED.status,
+			last_seen_at = EXCLUDED.last_seen_at,
+			updated_at = EXCLUDED.updated_at`,
+		animal.ID,
+		animal.FarmID,
+		strings.TrimSpace(strings.ToUpper(animal.AnimalCode)),
+		nullIfEmpty(strings.TrimSpace(animal.DisplayName)),
+		nullIfEmpty(strings.TrimSpace(animal.Status)),
+		nullTime(animal.LastSeenAt),
+		animal.CreatedAt,
+		animal.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert farm animal: %w", err)
+	}
+	return nil
+}
+
+func (r *FarmAnimalRepository) TouchLastSeen(ctx context.Context, farmID, animalCode string, seenAt time.Time) error {
+	_, err := r.database.ExecContext(
+		ctx,
+		`UPDATE farm_animals
+		SET last_seen_at = $3,
+			updated_at = $3
+		WHERE farm_id = $1 AND animal_code = $2`,
+		farmID,
+		strings.TrimSpace(strings.ToUpper(animalCode)),
+		seenAt,
+	)
+	if err != nil {
+		return fmt.Errorf("touch farm animal last seen: %w", err)
+	}
+	return nil
 }
 
 func (r *PhoneContextStateRepository) GetByPhoneNumber(ctx context.Context, phoneNumber string) (agro.PhoneContextState, bool, error) {
