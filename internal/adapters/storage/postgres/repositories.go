@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1199,6 +1200,130 @@ func (r *BusinessEventRepository) FindByID(ctx context.Context, eventID string) 
 	return event, true, nil
 }
 
+func (r *BusinessEventRepository) ListActiveMilkWithdrawalAnimals(ctx context.Context, farmID string, reference time.Time) ([]agro.MilkWithdrawalAnimal, error) {
+	rows, err := r.database.QueryContext(
+		ctx,
+		`SELECT
+			be.id,
+			be.animal_code,
+			be.subcategory,
+			be.description,
+			be.occurred_at,
+			ea.attr_key,
+			ea.attr_value
+		FROM business_events be
+		LEFT JOIN event_attributes ea ON ea.business_event_id = be.id
+		WHERE be.farm_id = $1
+			AND be.category = 'health'
+			AND be.status = 'confirmed'
+			AND be.animal_code IS NOT NULL
+		ORDER BY be.updated_at DESC, be.created_at DESC`,
+		farmID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list active milk withdrawal animals: %w", err)
+	}
+	defer rows.Close()
+
+	type aggregated struct {
+		item           agro.MilkWithdrawalAnimal
+		milkWithdrawal bool
+		treatmentDays  int
+	}
+
+	byEvent := make(map[string]*aggregated)
+	order := make([]string, 0)
+
+	for rows.Next() {
+		var (
+			eventID     string
+			animalCode  sql.NullString
+			subcategory string
+			description string
+			occurredAt  sql.NullTime
+			attrKey     sql.NullString
+			attrValue   sql.NullString
+		)
+		if err := rows.Scan(&eventID, &animalCode, &subcategory, &description, &occurredAt, &attrKey, &attrValue); err != nil {
+			return nil, fmt.Errorf("scan active milk withdrawal animals: %w", err)
+		}
+		entry, found := byEvent[eventID]
+		if !found {
+			entry = &aggregated{
+				item: agro.MilkWithdrawalAnimal{
+					AnimalCode:  strings.TrimSpace(animalCode.String),
+					Subcategory: subcategory,
+					Description: description,
+				},
+			}
+			if occurredAt.Valid {
+				timestamp := occurredAt.Time
+				entry.item.OccurredAt = &timestamp
+			}
+			byEvent[eventID] = entry
+			order = append(order, eventID)
+		}
+		if !attrKey.Valid {
+			continue
+		}
+		switch strings.TrimSpace(attrKey.String) {
+		case "milk_withdrawal":
+			entry.milkWithdrawal = strings.EqualFold(strings.TrimSpace(attrValue.String), "true")
+		case "affected_teats":
+			if attrValue.Valid && strings.TrimSpace(attrValue.String) != "" {
+				entry.item.AffectedTeats = splitCSVStrings(attrValue.String)
+			}
+		case "treatment_days":
+			if attrValue.Valid {
+				if value, err := strconv.Atoi(strings.TrimSpace(attrValue.String)); err == nil && value > 0 {
+					entry.treatmentDays = value
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active milk withdrawal animals: %w", err)
+	}
+
+	activeByAnimal := make(map[string]agro.MilkWithdrawalAnimal)
+	for _, eventID := range order {
+		entry := byEvent[eventID]
+		if entry == nil || !entry.milkWithdrawal || strings.TrimSpace(entry.item.AnimalCode) == "" {
+			continue
+		}
+		baseDate := reference
+		if entry.item.OccurredAt != nil {
+			baseDate = entry.item.OccurredAt.UTC()
+		}
+		if entry.treatmentDays > 0 {
+			activeUntil := baseDate.AddDate(0, 0, entry.treatmentDays)
+			entry.item.ActiveUntil = &activeUntil
+			if reference.After(activeUntil) {
+				continue
+			}
+		}
+		if _, exists := activeByAnimal[entry.item.AnimalCode]; exists {
+			continue
+		}
+		activeByAnimal[entry.item.AnimalCode] = entry.item
+	}
+
+	result := make([]agro.MilkWithdrawalAnimal, 0, len(activeByAnimal))
+	for _, eventID := range order {
+		entry := byEvent[eventID]
+		if entry == nil {
+			continue
+		}
+		item, exists := activeByAnimal[entry.item.AnimalCode]
+		if !exists {
+			continue
+		}
+		result = append(result, item)
+		delete(activeByAnimal, entry.item.AnimalCode)
+	}
+	return result, nil
+}
+
 func (r *BusinessEventRepository) CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error {
 	_, err := r.database.ExecContext(
 		ctx,
@@ -1321,4 +1446,17 @@ func phoneLookupVariants(phoneNumber string) (string, string) {
 	default:
 		return candidates[0], candidates[1]
 	}
+}
+
+func splitCSVStrings(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
 }

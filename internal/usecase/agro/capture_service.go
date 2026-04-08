@@ -19,6 +19,7 @@ type CaptureService struct {
 	persistence        CapturePersistence
 	healthFlow         HealthTreatmentFlow
 	correlatedExpenses CorrelatedExpenseFlow
+	businessQueries    BusinessQueryFlow
 	chatHistory        chatbot.ConversationRepository
 	messageArchive     chatbot.MessageArchive
 	interpreter        Interpreter
@@ -117,6 +118,10 @@ func (s *CaptureService) SetCorrelatedExpenseStateRepository(repository Correlat
 	s.correlatedExpenses = newDefaultCorrelatedExpenseFlow(s)
 }
 
+func (s *CaptureService) EnableBusinessQueryFlow() {
+	s.businessQueries = newDefaultBusinessQueryFlow(s)
+}
+
 func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message chat.IncomingMessage) (chatbot.ProcessResult, error) {
 	if s.downstream == nil {
 		return chatbot.ProcessResult{}, nil
@@ -163,6 +168,15 @@ func (s *CaptureService) ProcessIncomingMessage(ctx context.Context, message cha
 		}
 		if s.correlatedExpenses != nil {
 			handled, result, err = s.correlatedExpenses.HandleIncomingMessage(ctx, membership, message)
+			if err != nil {
+				return chatbot.ProcessResult{}, err
+			}
+			if handled {
+				return result, nil
+			}
+		}
+		if s.businessQueries != nil {
+			handled, result, err = s.businessQueries.HandleIncomingMessage(ctx, membership, message)
 			if err != nil {
 				return chatbot.ProcessResult{}, err
 			}

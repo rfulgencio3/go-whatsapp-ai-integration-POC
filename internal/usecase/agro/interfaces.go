@@ -68,6 +68,7 @@ type BusinessEventRepository interface {
 	Create(ctx context.Context, event *domain.BusinessEvent) error
 	CreateAttributes(ctx context.Context, eventID string, attributes map[string]string) error
 	FindByID(ctx context.Context, eventID string) (domain.BusinessEvent, bool, error)
+	ListActiveMilkWithdrawalAnimals(ctx context.Context, farmID string, reference time.Time) ([]domain.MilkWithdrawalAnimal, error)
 	CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error
 	UpdateStatus(ctx context.Context, eventID string, status domain.EventStatus, confirmedByUser bool, confirmedAt *time.Time) error
 }

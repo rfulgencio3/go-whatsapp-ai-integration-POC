@@ -1,0 +1,88 @@
+package agro
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	domain "github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/agro"
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/domain/chat"
+	"github.com/rfulgencio3/go-whatsapp-ai-integration-POC/internal/usecase/chatbot"
+)
+
+type defaultBusinessQueryFlow struct {
+	service *CaptureService
+}
+
+func newDefaultBusinessQueryFlow(service *CaptureService) BusinessQueryFlow {
+	if service == nil {
+		return nil
+	}
+	return &defaultBusinessQueryFlow{service: service}
+}
+
+func (f *defaultBusinessQueryFlow) HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error) {
+	s := f.service
+	if s == nil || s.workflowRouter == nil || s.replyFormatter == nil || s.businessEvents == nil || s.messageSender == nil {
+		return false, chatbot.ProcessResult{}, nil
+	}
+	if !s.workflowRouter.IsMilkWithdrawalQuery(message.Text) {
+		return false, chatbot.ProcessResult{}, nil
+	}
+
+	now := time.Now().UTC()
+	items, err := s.businessEvents.ListActiveMilkWithdrawalAnimals(ctx, membership.FarmID, now)
+	if err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+	replyText := s.replyFormatter.BuildMilkWithdrawalQueryReply(items, now)
+	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	userMessage := s.persistence.BuildChatMessageFromIncoming(message, strings.TrimSpace(message.Text))
+	assistantMessage := chat.Message{
+		Role:      chat.AssistantRole,
+		Text:      replyText,
+		CreatedAt: now,
+		Type:      chat.MessageTypeText,
+		Provider:  s.persistence.ProviderOrDefault(message.Provider),
+	}
+	if err := s.persistence.PersistLegacyConversation(ctx, normalizedPhone, userMessage, assistantMessage); err != nil {
+		return false, chatbot.ProcessResult{}, err
+	}
+
+	if s.conversations != nil && s.sourceMessages != nil {
+		conversation, err := s.conversations.GetOrCreateOpen(ctx, membership.FarmID, "whatsapp", normalizedPhone, now)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		sourceMessage := domain.SourceMessage{
+			ID:                uuid.NewString(),
+			ConversationID:    conversation.ID,
+			Provider:          s.persistence.ProviderOrDefault(message.Provider),
+			ProviderMessageID: strings.TrimSpace(message.MessageID),
+			SenderPhoneNumber: normalizedPhone,
+			MessageType:       s.persistence.ToDomainMessageType(message.Type),
+			RawText:           strings.TrimSpace(message.Text),
+			ReceivedAt:        now,
+			CreatedAt:         now,
+		}
+		if err := s.sourceMessages.Create(ctx, &sourceMessage); err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		if err := s.persistence.PersistAssistantMessage(ctx, conversation.ID, sourceMessage.ID, assistantMessage, domain.ReplyTypeText, now); err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+	}
+
+	return true, chatbot.ProcessResult{
+		PhoneNumber:      normalizedPhone,
+		IncomingMessage:  message,
+		UserMessage:      userMessage,
+		AssistantMessage: assistantMessage,
+	}, nil
+}

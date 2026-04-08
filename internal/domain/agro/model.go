@@ -271,6 +271,15 @@ type AssistantMessage struct {
 	CreatedAt         time.Time
 }
 
+type MilkWithdrawalAnimal struct {
+	AnimalCode    string
+	Subcategory   string
+	Description   string
+	AffectedTeats []string
+	OccurredAt    *time.Time
+	ActiveUntil   *time.Time
+}
+
 func NormalizePhoneNumber(value string) string {
 	return common.NormalizePhoneNumber(value)
 }

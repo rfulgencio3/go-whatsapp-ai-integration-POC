@@ -61,6 +61,26 @@ func buildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) st
 	return strings.Join(lines, "\n")
 }
 
+func buildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string {
+	if len(items) == 0 {
+		return "Nenhuma vaca com restricao de leite ativa no momento."
+	}
+
+	lines := []string{"Vacas com restricao de leite ativa:"}
+	for _, item := range items {
+		line := "Animal: " + item.AnimalCode
+		if len(item.AffectedTeats) > 0 {
+			line += " | Tetas: " + strings.Join(item.AffectedTeats, ",")
+		}
+		if item.ActiveUntil != nil {
+			line += " | Ate: " + item.ActiveUntil.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006")
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Referencia: "+reference.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006 15:04"))
+	return strings.Join(lines, "\n")
+}
+
 func buildRejectedReply() string {
 	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
 }

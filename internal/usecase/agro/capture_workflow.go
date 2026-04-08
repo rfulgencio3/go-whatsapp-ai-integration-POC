@@ -50,3 +50,21 @@ func isOnboardingStartCommand(text string) bool {
 		return false
 	}
 }
+
+func isMilkWithdrawalQuery(text string) bool {
+	normalized := normalizeText(text)
+	switch {
+	case strings.Contains(normalized, "quais vacas") && strings.Contains(normalized, "tirar leite"):
+		return true
+	case strings.Contains(normalized, "quais animais") && strings.Contains(normalized, "tirar leite"):
+		return true
+	case strings.Contains(normalized, "sem poder tirar leite"):
+		return true
+	case strings.Contains(normalized, "nao podem tirar leite"):
+		return true
+	case strings.Contains(normalized, "nao pode tirar leite") && strings.Contains(normalized, "quais"):
+		return true
+	default:
+		return false
+	}
+}

@@ -304,6 +304,7 @@ type stubBusinessEventRepository struct {
 	events          []domain.BusinessEvent
 	correctionLinks map[string]string
 	attributes      map[string]map[string]string
+	milkWithdrawal  []domain.MilkWithdrawalAnimal
 	err             error
 }
 
@@ -326,6 +327,13 @@ func (s *stubBusinessEventRepository) FindByID(_ context.Context, eventID string
 		}
 	}
 	return domain.BusinessEvent{}, false, nil
+}
+
+func (s *stubBusinessEventRepository) ListActiveMilkWithdrawalAnimals(_ context.Context, _ string, _ time.Time) ([]domain.MilkWithdrawalAnimal, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]domain.MilkWithdrawalAnimal(nil), s.milkWithdrawal...), nil
 }
 
 func (s *stubBusinessEventRepository) CreateCorrectionLink(_ context.Context, eventID, correctedEventID string) error {
@@ -1788,4 +1796,88 @@ func TestCaptureServiceCompletesCorrelatedExpenseFlow(t *testing.T) {
 	if len(sourceMessages.messages) != 1 {
 		t.Fatalf("expected one synthetic source message for correlated expenses, got %d", len(sourceMessages.messages))
 	}
+}
+
+func TestCaptureServiceAnswersMilkWithdrawalQuery(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		milkWithdrawal: []domain.MilkWithdrawalAnimal{
+			{
+				AnimalCode:    "32",
+				Subcategory:   "mastitis_treatment",
+				Description:   "Tratamento de mastite",
+				AffectedTeats: []string{"T1", "T3"},
+				OccurredAt:    &now,
+				ActiveUntil:   timePtr(now.AddDate(0, 0, 5)),
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+
+	service := NewCaptureService(
+		nil,
+		&countingMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		businessEvents,
+		assistantMessages,
+	)
+	service.EnableBusinessQueryFlow()
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "query-1",
+		PhoneNumber: "5534988283531",
+		Text:        "Quais vacas nao podem tirar leite?",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound query reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(sender.lastBody, "Vacas com restricao de leite ativa") || !strings.Contains(sender.lastBody, "Animal: 32") {
+		t.Fatalf("unexpected milk withdrawal reply:\n%s", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != sender.lastBody {
+		t.Fatalf("expected assistant message to match outbound query reply")
+	}
+	if len(sourceMessages.messages) != 1 {
+		t.Fatalf("expected query source message to be persisted, got %d", len(sourceMessages.messages))
+	}
+	if len(assistantMessages.messages) != 1 {
+		t.Fatalf("expected query assistant message to be persisted, got %d", len(assistantMessages.messages))
+	}
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }

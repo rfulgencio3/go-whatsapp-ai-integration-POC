@@ -15,6 +15,7 @@ type ReplyFormatter interface {
 	BuildCorrelatedExpenseQuestion(state domain.CorrelatedExpenseState) string
 	BuildCorrelatedExpenseDeclinedReply() string
 	BuildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string
+	BuildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string
 	BuildRejectedReply() string
 	BuildUnregisteredNumberReply() string
 	BuildAmbiguousContextReply() string
@@ -32,6 +33,7 @@ type WorkflowRouter interface {
 	ParseContextSelection(text string) int
 	IsContextSwitchCommand(text string) bool
 	IsOnboardingStartCommand(text string) bool
+	IsMilkWithdrawalQuery(text string) bool
 }
 
 type CapturePersistence interface {
@@ -49,6 +51,10 @@ type HealthTreatmentFlow interface {
 }
 
 type CorrelatedExpenseFlow interface {
+	HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error)
+}
+
+type BusinessQueryFlow interface {
 	HandleIncomingMessage(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage) (bool, chatbot.ProcessResult, error)
 }
 
@@ -72,6 +78,10 @@ func (defaultReplyFormatter) BuildCorrelatedExpenseDeclinedReply() string {
 
 func (defaultReplyFormatter) BuildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string {
 	return buildCorrelatedExpenseRecordedReply(state)
+}
+
+func (defaultReplyFormatter) BuildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string {
+	return buildMilkWithdrawalQueryReply(items, reference)
 }
 
 func (defaultReplyFormatter) BuildRejectedReply() string {
@@ -130,6 +140,10 @@ func (defaultWorkflowRouter) IsContextSwitchCommand(text string) bool {
 
 func (defaultWorkflowRouter) IsOnboardingStartCommand(text string) bool {
 	return isOnboardingStartCommand(text)
+}
+
+func (defaultWorkflowRouter) IsMilkWithdrawalQuery(text string) bool {
+	return isMilkWithdrawalQuery(text)
 }
 
 type defaultCapturePersistence struct {
