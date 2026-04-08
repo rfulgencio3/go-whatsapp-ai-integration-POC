@@ -28,16 +28,43 @@ func (f *defaultBusinessQueryFlow) HandleIncomingMessage(ctx context.Context, me
 	if s == nil || s.workflowRouter == nil || s.replyFormatter == nil || s.businessEvents == nil || s.messageSender == nil {
 		return false, chatbot.ProcessResult{}, nil
 	}
-	if !s.workflowRouter.IsMilkWithdrawalQuery(message.Text) {
+	now := time.Now().UTC()
+	var (
+		replyText string
+		err       error
+	)
+	switch {
+	case s.workflowRouter.IsMilkWithdrawalQuery(message.Text):
+		var items []domain.MilkWithdrawalAnimal
+		items, err = s.businessEvents.ListActiveMilkWithdrawalAnimals(ctx, membership.FarmID, now)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = s.replyFormatter.BuildMilkWithdrawalQueryReply(items, now)
+	case s.workflowRouter.IsRecentTreatmentsQuery(message.Text):
+		var items []domain.HealthTreatmentSummary
+		items, err = s.businessEvents.ListRecentHealthTreatments(ctx, membership.FarmID, 5)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = s.replyFormatter.BuildRecentHealthTreatmentsReply(items, now)
+	case s.workflowRouter.IsMedicineExpenseMonthQuery(message.Text):
+		periodStart, periodEnd := currentMonthRange(now)
+		var amount float64
+		amount, err = s.businessEvents.SumMedicineExpensesForMonth(ctx, membership.FarmID, periodStart, periodEnd)
+		if err != nil {
+			return false, chatbot.ProcessResult{}, err
+		}
+		replyText = s.replyFormatter.BuildMedicineExpenseMonthReply(amount, now)
+	default:
 		return false, chatbot.ProcessResult{}, nil
 	}
 
-	now := time.Now().UTC()
-	items, err := s.businessEvents.ListActiveMilkWithdrawalAnimals(ctx, membership.FarmID, now)
-	if err != nil {
-		return false, chatbot.ProcessResult{}, err
-	}
-	replyText := s.replyFormatter.BuildMilkWithdrawalQueryReply(items, now)
+	return f.sendQueryReply(ctx, membership, message, replyText, now)
+}
+
+func (f *defaultBusinessQueryFlow) sendQueryReply(ctx context.Context, membership domain.FarmMembership, message chat.IncomingMessage, replyText string, now time.Time) (bool, chatbot.ProcessResult, error) {
+	s := f.service
 	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
 		return false, chatbot.ProcessResult{}, err
@@ -85,4 +112,12 @@ func (f *defaultBusinessQueryFlow) HandleIncomingMessage(ctx context.Context, me
 		UserMessage:      userMessage,
 		AssistantMessage: assistantMessage,
 	}, nil
+}
+
+func currentMonthRange(reference time.Time) (time.Time, time.Time) {
+	location := time.FixedZone("BRT", -3*60*60)
+	local := reference.In(location)
+	start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, location)
+	end := start.AddDate(0, 1, 0)
+	return start.UTC(), end.UTC()
 }

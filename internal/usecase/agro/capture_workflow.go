@@ -68,3 +68,27 @@ func isMilkWithdrawalQuery(text string) bool {
 		return false
 	}
 }
+
+func isRecentTreatmentsQuery(text string) bool {
+	normalized := normalizeText(text)
+	switch {
+	case strings.Contains(normalized, "ultimos tratamentos"):
+		return true
+	case strings.Contains(normalized, "ultimos casos"):
+		return true
+	case strings.Contains(normalized, "tratamentos recentes"):
+		return true
+	case strings.Contains(normalized, "quais foram os ultimos tratamentos"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isMedicineExpenseMonthQuery(text string) bool {
+	normalized := normalizeText(text)
+	hasMedicine := strings.Contains(normalized, "medicamento") || strings.Contains(normalized, "remedio") || strings.Contains(normalized, "remedio")
+	hasMonth := strings.Contains(normalized, "esse mes") || strings.Contains(normalized, "este mes") || strings.Contains(normalized, "no mes") || strings.Contains(normalized, "neste mes")
+	hasSpend := strings.Contains(normalized, "quanto gastei") || strings.Contains(normalized, "quanto foi gasto") || strings.Contains(normalized, "gasto com")
+	return hasMedicine && hasMonth && hasSpend
+}

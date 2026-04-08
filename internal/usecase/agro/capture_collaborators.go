@@ -16,6 +16,8 @@ type ReplyFormatter interface {
 	BuildCorrelatedExpenseDeclinedReply() string
 	BuildCorrelatedExpenseRecordedReply(state domain.CorrelatedExpenseState) string
 	BuildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string
+	BuildRecentHealthTreatmentsReply(items []domain.HealthTreatmentSummary, reference time.Time) string
+	BuildMedicineExpenseMonthReply(amount float64, reference time.Time) string
 	BuildRejectedReply() string
 	BuildUnregisteredNumberReply() string
 	BuildAmbiguousContextReply() string
@@ -34,6 +36,8 @@ type WorkflowRouter interface {
 	IsContextSwitchCommand(text string) bool
 	IsOnboardingStartCommand(text string) bool
 	IsMilkWithdrawalQuery(text string) bool
+	IsRecentTreatmentsQuery(text string) bool
+	IsMedicineExpenseMonthQuery(text string) bool
 }
 
 type CapturePersistence interface {
@@ -82,6 +86,14 @@ func (defaultReplyFormatter) BuildCorrelatedExpenseRecordedReply(state domain.Co
 
 func (defaultReplyFormatter) BuildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, reference time.Time) string {
 	return buildMilkWithdrawalQueryReply(items, reference)
+}
+
+func (defaultReplyFormatter) BuildRecentHealthTreatmentsReply(items []domain.HealthTreatmentSummary, reference time.Time) string {
+	return buildRecentHealthTreatmentsReply(items, reference)
+}
+
+func (defaultReplyFormatter) BuildMedicineExpenseMonthReply(amount float64, reference time.Time) string {
+	return buildMedicineExpenseMonthReply(amount, reference)
 }
 
 func (defaultReplyFormatter) BuildRejectedReply() string {
@@ -144,6 +156,14 @@ func (defaultWorkflowRouter) IsOnboardingStartCommand(text string) bool {
 
 func (defaultWorkflowRouter) IsMilkWithdrawalQuery(text string) bool {
 	return isMilkWithdrawalQuery(text)
+}
+
+func (defaultWorkflowRouter) IsRecentTreatmentsQuery(text string) bool {
+	return isRecentTreatmentsQuery(text)
+}
+
+func (defaultWorkflowRouter) IsMedicineExpenseMonthQuery(text string) bool {
+	return isMedicineExpenseMonthQuery(text)
 }
 
 type defaultCapturePersistence struct {

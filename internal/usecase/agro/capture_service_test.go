@@ -305,6 +305,8 @@ type stubBusinessEventRepository struct {
 	correctionLinks map[string]string
 	attributes      map[string]map[string]string
 	milkWithdrawal  []domain.MilkWithdrawalAnimal
+	recentHealth    []domain.HealthTreatmentSummary
+	medicineMonth   float64
 	err             error
 }
 
@@ -334,6 +336,20 @@ func (s *stubBusinessEventRepository) ListActiveMilkWithdrawalAnimals(_ context.
 		return nil, s.err
 	}
 	return append([]domain.MilkWithdrawalAnimal(nil), s.milkWithdrawal...), nil
+}
+
+func (s *stubBusinessEventRepository) ListRecentHealthTreatments(_ context.Context, _ string, _ int) ([]domain.HealthTreatmentSummary, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]domain.HealthTreatmentSummary(nil), s.recentHealth...), nil
+}
+
+func (s *stubBusinessEventRepository) SumMedicineExpensesForMonth(_ context.Context, _ string, _, _ time.Time) (float64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.medicineMonth, nil
 }
 
 func (s *stubBusinessEventRepository) CreateCorrectionLink(_ context.Context, eventID, correctedEventID string) error {
@@ -1875,6 +1891,149 @@ func TestCaptureServiceAnswersMilkWithdrawalQuery(t *testing.T) {
 	}
 	if len(assistantMessages.messages) != 1 {
 		t.Fatalf("expected query assistant message to be persisted, got %d", len(assistantMessages.messages))
+	}
+}
+
+func TestCaptureServiceAnswersRecentHealthTreatmentsQuery(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		recentHealth: []domain.HealthTreatmentSummary{
+			{
+				AnimalCode:    "32",
+				Subcategory:   "mastitis_treatment",
+				Description:   "Tratamento de mastite",
+				AffectedTeats: []string{"T1", "T3"},
+				OccurredAt:    &now,
+			},
+			{
+				AnimalCode:  "18",
+				Subcategory: "hoof_treatment",
+				Description: "Tratamento de casco",
+				OccurredAt:  timePtr(now.AddDate(0, 0, -1)),
+			},
+		},
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+
+	service := NewCaptureService(
+		nil,
+		&countingMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		businessEvents,
+		assistantMessages,
+	)
+	service.EnableBusinessQueryFlow()
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "query-2",
+		PhoneNumber: "5534988283531",
+		Text:        "Quais foram os ultimos tratamentos?",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound treatments reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(sender.lastBody, "Ultimos tratamentos de saude") || !strings.Contains(sender.lastBody, "Animal: 32") || !strings.Contains(sender.lastBody, "Animal: 18") {
+		t.Fatalf("unexpected recent treatments reply:\n%s", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != sender.lastBody {
+		t.Fatalf("expected assistant message to match outbound treatments reply")
+	}
+}
+
+func TestCaptureServiceAnswersMedicineExpenseMonthQuery(t *testing.T) {
+	t.Parallel()
+
+	conversations := &stubConversationRepository{
+		conversation: domain.Conversation{
+			ID:     "conv-1",
+			FarmID: "farm-1",
+		},
+	}
+	sourceMessages := &stubSourceMessageRepository{}
+	assistantMessages := &stubAssistantMessageRepository{}
+	businessEvents := &stubBusinessEventRepository{
+		medicineMonth: 275.50,
+	}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+
+	service := NewCaptureService(
+		nil,
+		&countingMessageProcessor{},
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5534988283531", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		conversations,
+		sourceMessages,
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		businessEvents,
+		assistantMessages,
+	)
+	service.EnableBusinessQueryFlow()
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "query-3",
+		PhoneNumber: "5534988283531",
+		Text:        "Quanto gastei com medicamento esse mes?",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	if sender.sendCount != 1 {
+		t.Fatalf("expected one outbound medicine expense reply, got %d", sender.sendCount)
+	}
+	if !strings.Contains(sender.lastBody, "Gasto com medicamento no mes") || !strings.Contains(sender.lastBody, "R$ 275.50") {
+		t.Fatalf("unexpected medicine expense reply:\n%s", sender.lastBody)
+	}
+	if result.AssistantMessage.Text != sender.lastBody {
+		t.Fatalf("expected assistant message to match outbound medicine expense reply")
 	}
 }
 

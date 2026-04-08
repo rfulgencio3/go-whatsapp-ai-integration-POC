@@ -1324,6 +1324,116 @@ func (r *BusinessEventRepository) ListActiveMilkWithdrawalAnimals(ctx context.Co
 	return result, nil
 }
 
+func (r *BusinessEventRepository) ListRecentHealthTreatments(ctx context.Context, farmID string, limit int) ([]agro.HealthTreatmentSummary, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := r.database.QueryContext(
+		ctx,
+		`SELECT
+			be.id,
+			be.animal_code,
+			be.subcategory,
+			be.description,
+			be.occurred_at,
+			ea.attr_key,
+			ea.attr_value
+		FROM business_events be
+		LEFT JOIN event_attributes ea ON ea.business_event_id = be.id
+		WHERE be.farm_id = $1
+			AND be.category = 'health'
+			AND be.status = 'confirmed'
+		ORDER BY COALESCE(be.occurred_at, be.confirmed_at, be.created_at) DESC
+		LIMIT $2`,
+		farmID,
+		limit*3,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recent health treatments: %w", err)
+	}
+	defer rows.Close()
+
+	byEvent := make(map[string]*agro.HealthTreatmentSummary)
+	order := make([]string, 0)
+
+	for rows.Next() {
+		var (
+			eventID     string
+			animalCode  sql.NullString
+			subcategory string
+			description string
+			occurredAt  sql.NullTime
+			attrKey     sql.NullString
+			attrValue   sql.NullString
+		)
+		if err := rows.Scan(&eventID, &animalCode, &subcategory, &description, &occurredAt, &attrKey, &attrValue); err != nil {
+			return nil, fmt.Errorf("scan recent health treatments: %w", err)
+		}
+		entry, found := byEvent[eventID]
+		if !found {
+			entry = &agro.HealthTreatmentSummary{
+				AnimalCode:  strings.TrimSpace(animalCode.String),
+				Subcategory: subcategory,
+				Description: description,
+			}
+			if occurredAt.Valid {
+				timestamp := occurredAt.Time
+				entry.OccurredAt = &timestamp
+			}
+			byEvent[eventID] = entry
+			order = append(order, eventID)
+		}
+		if attrKey.Valid && strings.TrimSpace(attrKey.String) == "affected_teats" && attrValue.Valid {
+			entry.AffectedTeats = splitCSVStrings(attrValue.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent health treatments: %w", err)
+	}
+
+	result := make([]agro.HealthTreatmentSummary, 0, limit)
+	for _, eventID := range order {
+		entry := byEvent[eventID]
+		if entry == nil {
+			continue
+		}
+		result = append(result, *entry)
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
+}
+
+func (r *BusinessEventRepository) SumMedicineExpensesForMonth(ctx context.Context, farmID string, periodStart, periodEnd time.Time) (float64, error) {
+	var total sql.NullFloat64
+	err := r.database.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(SUM(be.amount), 0)
+		FROM business_events be
+		INNER JOIN event_attributes ea
+			ON ea.business_event_id = be.id
+			AND ea.attr_key = 'expense_type'
+			AND ea.attr_value = 'medicine'
+		WHERE be.farm_id = $1
+			AND be.category = 'finance'
+			AND be.subcategory = 'expense'
+			AND be.status = 'confirmed'
+			AND COALESCE(be.occurred_at, be.confirmed_at, be.created_at) >= $2
+			AND COALESCE(be.occurred_at, be.confirmed_at, be.created_at) < $3`,
+		farmID,
+		periodStart,
+		periodEnd,
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("sum medicine expenses for month: %w", err)
+	}
+	if !total.Valid {
+		return 0, nil
+	}
+	return total.Float64, nil
+}
+
 func (r *BusinessEventRepository) CreateCorrectionLink(ctx context.Context, eventID, correctedEventID string) error {
 	_, err := r.database.ExecContext(
 		ctx,

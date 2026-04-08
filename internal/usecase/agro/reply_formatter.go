@@ -81,6 +81,34 @@ func buildMilkWithdrawalQueryReply(items []domain.MilkWithdrawalAnimal, referenc
 	return strings.Join(lines, "\n")
 }
 
+func buildRecentHealthTreatmentsReply(items []domain.HealthTreatmentSummary, reference time.Time) string {
+	if len(items) == 0 {
+		return "Nenhum tratamento de saude registrado recentemente."
+	}
+
+	lines := []string{"Ultimos tratamentos de saude:"}
+	for _, item := range items {
+		line := "Animal: " + item.AnimalCode
+		if item.Subcategory != "" {
+			line += " | Tipo: " + humanCategoryLabel("health", item.Subcategory)
+		}
+		if len(item.AffectedTeats) > 0 {
+			line += " | Tetas: " + strings.Join(item.AffectedTeats, ",")
+		}
+		if item.OccurredAt != nil {
+			line += " | Data: " + item.OccurredAt.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006")
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Referencia: "+reference.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006 15:04"))
+	return strings.Join(lines, "\n")
+}
+
+func buildMedicineExpenseMonthReply(amount float64, reference time.Time) string {
+	monthLabel := reference.In(time.FixedZone("BRT", -3*60*60)).Format("01/2006")
+	return fmt.Sprintf("Gasto com medicamento no mes %s: R$ %.2f", monthLabel, amount)
+}
+
 func buildRejectedReply() string {
 	return "Entendi. Nao vou considerar esse registro. Envie a correcao em uma unica mensagem."
 }
