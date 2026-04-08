@@ -81,14 +81,35 @@ type FarmMembership struct {
 }
 
 type FarmAnimal struct {
-	ID          string
-	FarmID      string
-	AnimalCode  string
-	DisplayName string
-	Status      string
-	LastSeenAt  *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID               string
+	FarmID           string
+	AnimalCode       string
+	DisplayName      string
+	AnimalType       string
+	Sex              string
+	BirthDate        *time.Time
+	MotherAnimalCode string
+	FirstCalvingDate *time.Time
+	Notes            string
+	Status           string
+	LastSeenAt       *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type AnimalVaccination struct {
+	ID              string
+	FarmID          string
+	AnimalCode      string
+	VaccineName     string
+	Dose            string
+	ApplicationDate time.Time
+	NextDueDate     *time.Time
+	Batch           string
+	AppliedBy       string
+	Notes           string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type FarmContext struct {

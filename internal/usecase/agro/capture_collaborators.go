@@ -25,7 +25,7 @@ type ReplyFormatter interface {
 	BuildMedicineExpenseMonthReply(amount float64, reference time.Time) string
 	BuildVetExpenseMonthReply(amount float64, reference time.Time) string
 	BuildRecentInputPurchasesReply(items []domain.InputPurchaseSummary, reference time.Time) string
-	BuildAnimalRegisteredReply(animalCode string) string
+	BuildAnimalRegisteredReply(animal domain.FarmAnimal) string
 	BuildMissingAnimalReply(animalCode string) string
 	BuildRejectedReply() string
 	BuildUnregisteredNumberReply() string
@@ -42,7 +42,7 @@ type ReplyFormatter interface {
 type WorkflowRouter interface {
 	ClassifyConfirmationDecision(text string) confirmationDecision
 	ParseContextSelection(text string) int
-	ParseAnimalRegistrationCommand(text string) (string, bool)
+	ParseAnimalRegistrationCommand(text string) (animalRegistrationCommand, bool)
 	IsContextSwitchCommand(text string) bool
 	IsOnboardingStartCommand(text string) bool
 	IsHelpCommand(text string) bool
@@ -138,8 +138,8 @@ func (defaultReplyFormatter) BuildRecentInputPurchasesReply(items []domain.Input
 	return buildRecentInputPurchasesReply(items, reference)
 }
 
-func (defaultReplyFormatter) BuildAnimalRegisteredReply(animalCode string) string {
-	return buildAnimalRegisteredReply(animalCode)
+func (defaultReplyFormatter) BuildAnimalRegisteredReply(animal domain.FarmAnimal) string {
+	return buildAnimalRegisteredReply(animal)
 }
 
 func (defaultReplyFormatter) BuildMissingAnimalReply(animalCode string) string {
@@ -196,7 +196,7 @@ func (defaultWorkflowRouter) ParseContextSelection(text string) int {
 	return parseContextSelection(text)
 }
 
-func (defaultWorkflowRouter) ParseAnimalRegistrationCommand(text string) (string, bool) {
+func (defaultWorkflowRouter) ParseAnimalRegistrationCommand(text string) (animalRegistrationCommand, bool) {
 	return parseAnimalRegistrationCommand(text)
 }
 

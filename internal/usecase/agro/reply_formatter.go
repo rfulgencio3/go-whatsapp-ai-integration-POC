@@ -259,8 +259,34 @@ func buildRejectedReply() string {
 	return "Certo. Nao vou considerar esse registro. Me envie a correcao em uma unica mensagem."
 }
 
-func buildAnimalRegisteredReply(animalCode string) string {
-	return fmt.Sprintf("Pronto. Cadastrei a vaca %s para essa fazenda. Se quiser, agora pode repetir o registro de inseminacao.", strings.TrimSpace(strings.ToUpper(animalCode)))
+func buildAnimalRegisteredReply(animal domain.FarmAnimal) string {
+	animalCode := strings.TrimSpace(strings.ToUpper(animal.AnimalCode))
+	animalLabel := strings.TrimSpace(animal.AnimalType)
+	if animalLabel == "" {
+		animalLabel = "animal"
+	}
+
+	lines := []string{fmt.Sprintf("Pronto. Cadastrei %s %s %s para essa fazenda.", articleForAnimalType(animalLabel), animalLabel, animalCode)}
+	if animal.BirthDate != nil {
+		lines = append(lines, fmt.Sprintf("Nascimento: %s", animal.BirthDate.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006")))
+	}
+	if strings.TrimSpace(animal.MotherAnimalCode) != "" {
+		lines = append(lines, fmt.Sprintf("Mae: %s", strings.TrimSpace(strings.ToUpper(animal.MotherAnimalCode))))
+	}
+	if animal.FirstCalvingDate != nil {
+		lines = append(lines, fmt.Sprintf("Primeiro parto: %s", animal.FirstCalvingDate.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006")))
+	}
+	lines = append(lines, "Se quiser, agora pode repetir o registro operacional.")
+	return strings.Join(lines, "\n")
+}
+
+func articleForAnimalType(animalType string) string {
+	switch strings.TrimSpace(animalType) {
+	case "vaca", "matriz", "novilha", "bezerra":
+		return "a"
+	default:
+		return "o"
+	}
 }
 
 func buildMissingAnimalReply(animalCode string) string {

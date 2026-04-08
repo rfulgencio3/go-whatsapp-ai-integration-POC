@@ -1607,6 +1607,79 @@ func TestCaptureServiceRegistersAnimalByCommand(t *testing.T) {
 	}
 }
 
+func TestCaptureServiceRegistersAnimalWithLifecycleDetails(t *testing.T) {
+	t.Parallel()
+
+	processor := &countingMessageProcessor{}
+	sender := &stubChatMessageSender{}
+	chatHistory := newStubChatConversationRepository()
+	archive := &stubChatMessageArchive{}
+	animals := &stubFarmAnimalRepository{}
+	service := NewCaptureService(
+		nil,
+		processor,
+		sender,
+		chatHistory,
+		archive,
+		NewRuleBasedInterpreter(),
+		stubFarmMembershipRepository{
+			memberships: []domain.FarmMembership{
+				{ID: "membership-1", FarmID: "farm-1", PhoneNumber: "5511999999999", Status: "active"},
+			},
+		},
+		nil,
+		nil,
+		nil,
+		&stubConversationRepository{},
+		&stubSourceMessageRepository{},
+		&stubTranscriptionRepository{},
+		&stubInterpretationRunRepository{},
+		&stubBusinessEventRepository{},
+		&stubAssistantMessageRepository{},
+	)
+	service.SetFarmAnimalRepository(animals)
+
+	result, err := service.ProcessIncomingMessage(context.Background(), chat.IncomingMessage{
+		MessageID:   "animal-register-2",
+		PhoneNumber: "5511999999999",
+		Text:        "cadastrar bezerra 45 filha da vaca 32 nascida em 08/04/2026",
+		Type:        chat.MessageTypeText,
+		Provider:    "whatsmeow",
+	})
+	if err != nil {
+		t.Fatalf("ProcessIncomingMessage() error = %v", err)
+	}
+
+	animal, found, err := animals.FindByAnimalCode(context.Background(), "farm-1", "45")
+	if err != nil {
+		t.Fatalf("FindByAnimalCode() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("expected animal 45 to be registered")
+	}
+	if animal.AnimalType != "bezerra" {
+		t.Fatalf("expected animal type bezerra, got %q", animal.AnimalType)
+	}
+	if animal.Sex != "female" {
+		t.Fatalf("expected animal sex female, got %q", animal.Sex)
+	}
+	if animal.MotherAnimalCode != "32" {
+		t.Fatalf("expected mother animal code 32, got %q", animal.MotherAnimalCode)
+	}
+	if animal.BirthDate == nil || animal.BirthDate.In(time.FixedZone("BRT", -3*60*60)).Format("02/01/2006") != "08/04/2026" {
+		t.Fatalf("expected birth date 08/04/2026, got %#v", animal.BirthDate)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Cadastrei a bezerra 45") {
+		t.Fatalf("unexpected rich animal registration reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Mae: 32") {
+		t.Fatalf("expected mother summary in reply: %q", result.AssistantMessage.Text)
+	}
+	if !strings.Contains(result.AssistantMessage.Text, "Nascimento: 08/04/2026") {
+		t.Fatalf("expected birth summary in reply: %q", result.AssistantMessage.Text)
+	}
+}
+
 func TestCaptureServiceConfirmsLatestDraftEvent(t *testing.T) {
 	t.Parallel()
 

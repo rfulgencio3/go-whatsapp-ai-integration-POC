@@ -5,6 +5,15 @@ import "strings"
 type confirmationDecision string
 type helpTopic string
 
+type animalRegistrationCommand struct {
+	AnimalCode       string
+	AnimalType       string
+	Sex              string
+	BirthDate        string
+	MotherAnimalCode string
+	FirstCalvingDate string
+}
+
 const (
 	confirmationAccepted confirmationDecision = "accepted"
 	confirmationRejected confirmationDecision = "rejected"
@@ -61,26 +70,83 @@ func isHelpCommand(text string) bool {
 	return parseHelpTopic(text) != ""
 }
 
-func parseAnimalRegistrationCommand(text string) (string, bool) {
+func parseAnimalRegistrationCommand(text string) (animalRegistrationCommand, bool) {
 	normalized := normalizeText(text)
 	switch {
 	case strings.HasPrefix(normalized, "cadastrar vaca "):
-		return extractTrailingAnimalCode(normalized, "cadastrar vaca ")
+		return parseAnimalRegistrationDetails(normalized, "cadastrar vaca ", "vaca", "female")
 	case strings.HasPrefix(normalized, "cadastrar matriz "):
-		return extractTrailingAnimalCode(normalized, "cadastrar matriz ")
+		return parseAnimalRegistrationDetails(normalized, "cadastrar matriz ", "vaca", "female")
+	case strings.HasPrefix(normalized, "cadastrar novilha "):
+		return parseAnimalRegistrationDetails(normalized, "cadastrar novilha ", "novilha", "female")
+	case strings.HasPrefix(normalized, "cadastrar bezerra "):
+		return parseAnimalRegistrationDetails(normalized, "cadastrar bezerra ", "bezerra", "female")
+	case strings.HasPrefix(normalized, "cadastrar bezerro "):
+		return parseAnimalRegistrationDetails(normalized, "cadastrar bezerro ", "bezerro", "male")
 	case strings.HasPrefix(normalized, "cadastrar animal "):
-		return extractTrailingAnimalCode(normalized, "cadastrar animal ")
+		return parseAnimalRegistrationDetails(normalized, "cadastrar animal ", "", "")
 	default:
-		return "", false
+		return animalRegistrationCommand{}, false
 	}
 }
 
-func extractTrailingAnimalCode(text, prefix string) (string, bool) {
+func parseAnimalRegistrationDetails(text, prefix, animalType, sex string) (animalRegistrationCommand, bool) {
 	value := strings.TrimSpace(strings.TrimPrefix(text, prefix))
 	if value == "" {
-		return "", false
+		return animalRegistrationCommand{}, false
 	}
-	return strings.ToUpper(value), true
+
+	command := animalRegistrationCommand{
+		AnimalType: animalType,
+		Sex:        sex,
+	}
+	parts := strings.Fields(value)
+	if len(parts) == 0 {
+		return animalRegistrationCommand{}, false
+	}
+	command.AnimalCode = strings.ToUpper(strings.TrimSpace(parts[0]))
+	remainder := strings.TrimSpace(strings.TrimPrefix(value, parts[0]))
+
+	switch {
+	case strings.Contains(remainder, "filha da vaca "):
+		command.MotherAnimalCode = extractDelimitedValue(remainder, "filha da vaca ", " nascida em ")
+	case strings.Contains(remainder, "filho da vaca "):
+		command.MotherAnimalCode = extractDelimitedValue(remainder, "filho da vaca ", " nascido em ")
+	case strings.Contains(remainder, "filha de "):
+		command.MotherAnimalCode = extractDelimitedValue(remainder, "filha de ", " nascida em ")
+	case strings.Contains(remainder, "filho de "):
+		command.MotherAnimalCode = extractDelimitedValue(remainder, "filho de ", " nascido em ")
+	}
+
+	switch {
+	case strings.Contains(remainder, "nascida em "):
+		command.BirthDate = extractDelimitedValue(remainder, "nascida em ", " primeiro parto em ")
+	case strings.Contains(remainder, "nascido em "):
+		command.BirthDate = extractDelimitedValue(remainder, "nascido em ", " primeiro parto em ")
+	}
+
+	if strings.Contains(remainder, "primeiro parto em ") {
+		command.FirstCalvingDate = extractDelimitedValue(remainder, "primeiro parto em ", "")
+	}
+
+	return command, true
+}
+
+func extractDelimitedValue(text, startMarker, endMarker string) string {
+	value := text
+	if startMarker != "" {
+		startIndex := strings.Index(value, startMarker)
+		if startIndex < 0 {
+			return ""
+		}
+		value = value[startIndex+len(startMarker):]
+	}
+	if endMarker != "" {
+		if endIndex := strings.Index(value, endMarker); endIndex >= 0 {
+			value = value[:endIndex]
+		}
+	}
+	return strings.ToUpper(strings.TrimSpace(value))
 }
 
 func parseHelpTopic(text string) helpTopic {

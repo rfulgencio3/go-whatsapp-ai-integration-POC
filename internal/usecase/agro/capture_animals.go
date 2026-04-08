@@ -17,22 +17,29 @@ func (s *CaptureService) handleAnimalRegistration(ctx context.Context, membershi
 		return false, chatbot.ProcessResult{}, nil
 	}
 
-	animalCode, ok := s.workflowRouter.ParseAnimalRegistrationCommand(message.Text)
+	command, ok := s.workflowRouter.ParseAnimalRegistrationCommand(message.Text)
 	if !ok {
 		return false, chatbot.ProcessResult{}, nil
 	}
 
 	now := time.Now().UTC()
 	normalizedPhone := domain.NormalizePhoneNumber(message.PhoneNumber)
+	birthDate, _ := parseAnimalLifecycleDate(command.BirthDate)
+	firstCalvingDate, _ := parseAnimalLifecycleDate(command.FirstCalvingDate)
 	animal := domain.FarmAnimal{
-		ID:          uuid.NewString(),
-		FarmID:      membership.FarmID,
-		AnimalCode:  strings.TrimSpace(strings.ToUpper(animalCode)),
-		DisplayName: "Vaca " + strings.TrimSpace(strings.ToUpper(animalCode)),
-		Status:      "active",
-		LastSeenAt:  &now,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:               uuid.NewString(),
+		FarmID:           membership.FarmID,
+		AnimalCode:       strings.TrimSpace(strings.ToUpper(command.AnimalCode)),
+		DisplayName:      buildAnimalDisplayName(command),
+		AnimalType:       strings.TrimSpace(command.AnimalType),
+		Sex:              strings.TrimSpace(command.Sex),
+		BirthDate:        birthDate,
+		MotherAnimalCode: strings.TrimSpace(strings.ToUpper(command.MotherAnimalCode)),
+		FirstCalvingDate: firstCalvingDate,
+		Status:           "active",
+		LastSeenAt:       &now,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if err := s.farmAnimals.Upsert(ctx, &animal); err != nil {
 		return false, chatbot.ProcessResult{}, err
@@ -41,7 +48,7 @@ func (s *CaptureService) handleAnimalRegistration(ctx context.Context, membershi
 		s.animalCache.Set(membership.FarmID, animal.AnimalCode, true)
 	}
 
-	replyText := s.replyFormatter.BuildAnimalRegisteredReply(animal.AnimalCode)
+	replyText := s.replyFormatter.BuildAnimalRegisteredReply(animal)
 	if err := s.messageSender.SendTextMessage(ctx, normalizedPhone, replyText); err != nil {
 		return false, chatbot.ProcessResult{}, err
 	}
@@ -64,6 +71,30 @@ func (s *CaptureService) handleAnimalRegistration(ctx context.Context, membershi
 		UserMessage:      userMessage,
 		AssistantMessage: assistantMessage,
 	}, nil
+}
+
+func buildAnimalDisplayName(command animalRegistrationCommand) string {
+	animalCode := strings.TrimSpace(strings.ToUpper(command.AnimalCode))
+	animalType := strings.TrimSpace(command.AnimalType)
+	if animalType == "" {
+		return "Animal " + animalCode
+	}
+	return strings.ToUpper(animalType[:1]) + animalType[1:] + " " + animalCode
+}
+
+func parseAnimalLifecycleDate(value string) (*time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, false
+	}
+	location := time.FixedZone("BRT", -3*60*60)
+	for _, layout := range []string{"02/01/2006", "2/1/2006", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, value, location); err == nil {
+			result := parsed.UTC()
+			return &result, true
+		}
+	}
+	return nil, false
 }
 
 func (s *CaptureService) validateAnimalExists(ctx context.Context, farmID, animalCode string) (bool, error) {

@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS farm_animals (
     farm_id UUID NOT NULL REFERENCES farms(id),
     animal_code TEXT NOT NULL,
     display_name TEXT,
+    animal_type TEXT,
+    sex TEXT,
+    birth_date DATE,
+    mother_animal_code TEXT,
+    first_calving_date DATE,
+    notes TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     last_seen_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -51,6 +57,24 @@ CREATE TABLE IF NOT EXISTS farm_animals (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_farm_animals_farm_code
     ON farm_animals(farm_id, animal_code);
+
+CREATE TABLE IF NOT EXISTS animal_vaccinations (
+    id UUID PRIMARY KEY,
+    farm_id UUID NOT NULL REFERENCES farms(id),
+    animal_code TEXT NOT NULL,
+    vaccine_name TEXT NOT NULL,
+    dose TEXT,
+    application_date DATE NOT NULL,
+    next_due_date DATE,
+    batch TEXT,
+    applied_by TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_animal_vaccinations_farm_animal_date
+    ON animal_vaccinations(farm_id, animal_code, application_date DESC);
 
 CREATE TABLE IF NOT EXISTS phone_context_states (
     phone_number TEXT PRIMARY KEY,

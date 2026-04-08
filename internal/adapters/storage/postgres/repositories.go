@@ -272,11 +272,17 @@ func (r *FarmRegistrationRepository) CreateInitialRegistration(ctx context.Conte
 func (r *FarmAnimalRepository) FindByAnimalCode(ctx context.Context, farmID, animalCode string) (agro.FarmAnimal, bool, error) {
 	var animal agro.FarmAnimal
 	var displayName sql.NullString
+	var animalType sql.NullString
+	var sex sql.NullString
+	var birthDate sql.NullTime
+	var motherAnimalCode sql.NullString
+	var firstCalvingDate sql.NullTime
+	var notes sql.NullString
 	var lastSeenAt sql.NullTime
 
 	err := r.database.QueryRowContext(
 		ctx,
-		`SELECT id, farm_id, animal_code, display_name, status, last_seen_at, created_at, updated_at
+		`SELECT id, farm_id, animal_code, display_name, animal_type, sex, birth_date, mother_animal_code, first_calving_date, notes, status, last_seen_at, created_at, updated_at
 		FROM farm_animals
 		WHERE farm_id = $1 AND animal_code = $2
 		LIMIT 1`,
@@ -287,6 +293,12 @@ func (r *FarmAnimalRepository) FindByAnimalCode(ctx context.Context, farmID, ani
 		&animal.FarmID,
 		&animal.AnimalCode,
 		&displayName,
+		&animalType,
+		&sex,
+		&birthDate,
+		&motherAnimalCode,
+		&firstCalvingDate,
+		&notes,
 		&animal.Status,
 		&lastSeenAt,
 		&animal.CreatedAt,
@@ -300,6 +312,26 @@ func (r *FarmAnimalRepository) FindByAnimalCode(ctx context.Context, farmID, ani
 	}
 	if displayName.Valid {
 		animal.DisplayName = displayName.String
+	}
+	if animalType.Valid {
+		animal.AnimalType = animalType.String
+	}
+	if sex.Valid {
+		animal.Sex = sex.String
+	}
+	if birthDate.Valid {
+		timestamp := birthDate.Time
+		animal.BirthDate = &timestamp
+	}
+	if motherAnimalCode.Valid {
+		animal.MotherAnimalCode = motherAnimalCode.String
+	}
+	if firstCalvingDate.Valid {
+		timestamp := firstCalvingDate.Time
+		animal.FirstCalvingDate = &timestamp
+	}
+	if notes.Valid {
+		animal.Notes = notes.String
 	}
 	if lastSeenAt.Valid {
 		timestamp := lastSeenAt.Time
@@ -321,10 +353,31 @@ func (r *FarmAnimalRepository) Upsert(ctx context.Context, animal *agro.FarmAnim
 
 	_, err := r.database.ExecContext(
 		ctx,
-		`INSERT INTO farm_animals (id, farm_id, animal_code, display_name, status, last_seen_at, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		`INSERT INTO farm_animals (
+			id,
+			farm_id,
+			animal_code,
+			display_name,
+			animal_type,
+			sex,
+			birth_date,
+			mother_animal_code,
+			first_calving_date,
+			notes,
+			status,
+			last_seen_at,
+			created_at,
+			updated_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (farm_id, animal_code) DO UPDATE
 		SET display_name = EXCLUDED.display_name,
+			animal_type = EXCLUDED.animal_type,
+			sex = EXCLUDED.sex,
+			birth_date = EXCLUDED.birth_date,
+			mother_animal_code = EXCLUDED.mother_animal_code,
+			first_calving_date = EXCLUDED.first_calving_date,
+			notes = EXCLUDED.notes,
 			status = EXCLUDED.status,
 			last_seen_at = EXCLUDED.last_seen_at,
 			updated_at = EXCLUDED.updated_at`,
@@ -332,6 +385,12 @@ func (r *FarmAnimalRepository) Upsert(ctx context.Context, animal *agro.FarmAnim
 		animal.FarmID,
 		strings.TrimSpace(strings.ToUpper(animal.AnimalCode)),
 		nullIfEmpty(strings.TrimSpace(animal.DisplayName)),
+		nullIfEmpty(strings.TrimSpace(animal.AnimalType)),
+		nullIfEmpty(strings.TrimSpace(animal.Sex)),
+		nullDate(animal.BirthDate),
+		nullIfEmpty(strings.TrimSpace(strings.ToUpper(animal.MotherAnimalCode))),
+		nullDate(animal.FirstCalvingDate),
+		nullIfEmpty(strings.TrimSpace(animal.Notes)),
 		nullIfEmpty(strings.TrimSpace(animal.Status)),
 		nullTime(animal.LastSeenAt),
 		animal.CreatedAt,
@@ -1876,6 +1935,14 @@ func nullTime(value *time.Time) any {
 	}
 
 	return *value
+}
+
+func nullDate(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+
+	return value.UTC().Format("2006-01-02")
 }
 
 func nullFloat64(value *float64) any {
